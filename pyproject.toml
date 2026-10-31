@@ -1,0 +1,15 @@
+[project]
+name = "inspeccion-tolvas"
+version = "1.0.0"
+description = "Reporte de Inspeccion de Tolvas CAT 794AC"
+requires-python = ">=3.10"
+dependencies = [
+    "flet>=1.0",
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+    "pillow>=10.0.0",
+]
+
+[tool.flet]
+org = "com.dennis.tolvas"
+product = "Inspeccion Tolvas CAT"
