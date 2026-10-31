@@ -6,6 +6,8 @@ from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.worksheet.properties import PageSetupProperties
 import os
 import io
+import asyncio
+import tempfile
 import zipfile
 import re
 import json
@@ -15,7 +17,43 @@ from datetime import date
 # ==============================================================================
 # 1. BASE DE DATOS LOCAL Y CONSTANTES FIELES AL ORIGINAL
 # ==============================================================================
-DB_FILE = os.path.join("base_datos", "tolvas_db.json")
+def _bases_busqueda():
+    bases = []
+    try:
+        bases.append(os.path.dirname(os.path.abspath(__file__)))
+    except NameError:
+        pass
+    bases.append(os.getcwd())
+    for var in ("FLET_APP_DIR", "FLET_ASSETS_DIR"):
+        v = os.environ.get(var)
+        if v:
+            bases.append(v)
+    vistas, unicas = set(), []
+    for b in bases:
+        if b not in vistas:
+            vistas.add(b)
+            unicas.append(b)
+    return unicas
+
+def buscar_recurso(*partes):
+    """Busca un archivo o carpeta junto a main.py, en el cwd o en assets/ (funciona en PC y en el APK)."""
+    for base in _bases_busqueda():
+        for sub in ("", "assets"):
+            ruta = os.path.join(base, sub, *partes)
+            if os.path.exists(ruta):
+                return ruta
+    return None
+
+def diagnostico_archivos():
+    lineas = []
+    for base in _bases_busqueda()[:2]:
+        try:
+            lineas.append(f"{base}: " + ", ".join(sorted(os.listdir(base))[:20]))
+        except Exception as ex:
+            lineas.append(f"{base}: no se pudo leer ({ex})")
+    return "\n".join(lineas)
+
+DB_FILE = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or ".", "base_datos", "tolvas_db.json")
 
 def cargar_db():
     if os.path.exists(DB_FILE):
@@ -27,9 +65,12 @@ def cargar_db():
     return {}
 
 def guardar_db(data):
-    os.makedirs("base_datos", exist_ok=True)
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+    try:
+        os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception:
+        pass
 
 ROTAR_FOTOS_VERTICALES = False
 
@@ -730,7 +771,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         n_imgs = len(nombres_png)
         ancho_total_cols = 18
         for idx_img, nombre_png in enumerate(nombres_png):
-            ruta_png = os.path.join("imagenes_esquemas", nombre_png)
+            ruta_png = buscar_recurso("imagenes_esquemas", nombre_png) or os.path.join("imagenes_esquemas", nombre_png)
             if not os.path.exists(ruta_png):
                 continue
             col_ini = int(idx_img * ancho_total_cols / n_imgs)
@@ -815,7 +856,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
 def main(page: ft.Page):
     page.title = "Sistema de Inspección de Tolvas CAT 794 AC"
     page.scroll = "adaptive"
-    page.padding = 25
+    page.padding = 12
     page.theme_mode = ft.ThemeMode.DARK
     page.bgcolor = ft.Colors.with_opacity(1, "#0e1117")
 
@@ -823,35 +864,142 @@ def main(page: ft.Page):
     controles = {}
     llave_foto_actual = None
 
-    # --- SELECTOR DE ARCHIVOS COMPATIBLE CON FLET 1.0 ---
-    def foto_seleccionada(e):
-        if e.files and llave_foto_actual:
-            ruta = e.files[0].path
-            rutas_fotos[llave_foto_actual] = ruta
-            if llave_foto_actual in controles:
-                controles[llave_foto_actual].value = f"✅ {e.files[0].name}"
-                controles[llave_foto_actual].color = ft.Colors.GREEN_400
-            page.update()
-
-    try:
-        selector_fotos = ft.FilePicker(on_result=foto_seleccionada)
-    except Exception:
-        selector_fotos = ft.FilePicker()
-        selector_fotos.on_result = foto_seleccionada
-
+    # --- SELECTOR DE ARCHIVOS Y CÁMARA (FLET 1.0, ASÍNCRONO) ---
+    selector_fotos = ft.FilePicker()
     try:
         page.services.append(selector_fotos)
     except Exception:
-        page.add(ft.Row([selector_fotos], visible=False))
+        page.overlay.append(selector_fotos)
+
+    def es_movil():
+        try:
+            return bool(page.platform.is_mobile())
+        except Exception:
+            return page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.IOS)
+
+    def marcar_foto(llave, ruta, nombre):
+        rutas_fotos[llave] = ruta
+        if llave in controles:
+            controles[llave].value = f"✅ {nombre}"
+            controles[llave].color = ft.Colors.GREEN_400
+        page.update()
+
+    def marcar_error(llave, texto):
+        if llave in controles:
+            controles[llave].value = f"❌ {texto}"
+            controles[llave].color = ft.Colors.RED_400
+        page.update()
+
+    async def seleccionar_async(llave):
+        try:
+            archivos = await selector_fotos.pick_files(
+                allow_multiple=False,
+                file_type=ft.FilePickerFileType.IMAGE,
+            )
+            if archivos and archivos[0].path:
+                marcar_foto(llave, archivos[0].path, archivos[0].name)
+            elif archivos:
+                marcar_error(llave, "No se pudo leer la ruta del archivo")
+        except Exception as ex:
+            marcar_error(llave, f"Selector: {ex}")
 
     def abrir_selector(llave):
-        nonlocal llave_foto_actual
-        llave_foto_actual = llave
-        selector_fotos.pick_files(allowed_extensions=["jpg", "jpeg", "png"])
+        page.run_task(seleccionar_async, llave)
+
+    def guardar_foto_bytes(llave, datos):
+        im = Image.open(io.BytesIO(datos))
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        im.thumbnail((2000, 2000))
+        carpeta = os.environ.get("FLET_APP_STORAGE_TEMP") or tempfile.gettempdir()
+        os.makedirs(carpeta, exist_ok=True)
+        ruta = os.path.join(carpeta, f"{llave}.jpg")
+        im.save(ruta, "JPEG", quality=88)
+        return ruta
+
+    async def camara_async(llave):
+        try:
+            import flet_camera as fc
+        except Exception:
+            marcar_error(llave, "Cámara no disponible en esta versión; usa Galería")
+            return
+
+        camara = fc.Camera(expand=True, preview_enabled=True)
+        estado_cam = ft.Text("Iniciando cámara...", size=12)
+        btn_tomar = ft.FilledButton("Tomar foto", icon=ft.Icons.PHOTO_CAMERA, disabled=True)
+        btn_cerrar = ft.TextButton("Cancelar")
+        dialogo = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Tomar foto"),
+            content=ft.Container(
+                width=320, height=440,
+                content=ft.Column(
+                    [ft.Container(content=camara, expand=True, bgcolor=ft.Colors.BLACK, border_radius=6), estado_cam],
+                    spacing=8,
+                ),
+            ),
+            actions=[btn_tomar, btn_cerrar],
+        )
+
+        def cerrar(e=None):
+            try:
+                page.pop_dialog()
+            except Exception:
+                dialogo.open = False
+                page.update()
+
+        async def tomar(e=None):
+            try:
+                btn_tomar.disabled = True
+                estado_cam.value = "Capturando..."
+                page.update()
+                datos = await camara.take_picture()
+                ruta = guardar_foto_bytes(llave, datos)
+                cerrar()
+                marcar_foto(llave, ruta, "foto de cámara")
+            except Exception as ex:
+                estado_cam.value = f"Error al capturar: {ex}"
+                btn_tomar.disabled = False
+                page.update()
+
+        btn_tomar.on_click = tomar
+        btn_cerrar.on_click = cerrar
+        page.show_dialog(dialogo)
+
+        try:
+            lista = await camara.get_available_cameras()
+            if not lista:
+                estado_cam.value = "No se encontró ninguna cámara"
+                page.update()
+                return
+            elegida = next((c for c in lista if c.lens_direction == fc.CameraLensDirection.BACK), lista[0])
+            await camara.initialize(
+                description=elegida,
+                resolution_preset=fc.ResolutionPreset.HIGH,
+                enable_audio=False,
+                image_format_group=fc.ImageFormatGroup.JPEG,
+            )
+            btn_tomar.disabled = False
+            estado_cam.value = "Cámara lista"
+            page.update()
+        except Exception as ex:
+            estado_cam.value = f"No se pudo iniciar la cámara: {ex}"
+            page.update()
+
+    def abrir_camara(llave):
+        page.run_task(camara_async, llave)
+
+    def boton_foto(titulo, llave):
+        return ft.Column([
+            ft.Text(titulo, size=12, weight="bold"),
+            ft.Row([
+                ft.Button("📷 Cámara", on_click=lambda e, k=llave: abrir_camara(k)),
+                ft.OutlinedButton("🖼️ Galería", on_click=lambda e, k=llave: abrir_selector(k)),
+            ], wrap=True, spacing=8, run_spacing=6),
+        ], spacing=4)
 
     # --- TÍTULO E INFO ---
     page.add(
-        ft.Text("📋 Reporte de Inspección de Tolvas CAT 794 AC", size=28, weight="bold", color=ft.Colors.BLUE_200),
+        ft.Text("📋 Reporte de Inspección de Tolvas CAT 794 AC", size=22, weight="bold", color=ft.Colors.BLUE_200),
         ft.Container(
             content=ft.Text(
                 "💡 IMPORTANTE: Asegúrate de que tu archivo plantilla_tolva.xlsx esté completamente vacío de fotos. "
@@ -1023,8 +1171,8 @@ def main(page: ft.Page):
             aviso_no_medicion,
             ft.Text("Ingrese manualmente las lecturas de ultrasonido (mm) en la matriz:", size=12, color=ft.Colors.GREY_400),
             ft.Container(
-                content=ft.Column(filas_ui_matriz, spacing=6),
-                padding=15, bgcolor=ft.Colors.with_opacity(1, "#161a24"), border_radius=8
+                content=ft.Row([ft.Column(filas_ui_matriz, spacing=6)], scroll=ft.ScrollMode.AUTO),
+                padding=12, bgcolor=ft.Colors.with_opacity(1, "#161a24"), border_radius=8
             ),
             ft.Divider(height=25, color=ft.Colors.BLUE_GREY_700)
         ], spacing=10),
@@ -1047,10 +1195,13 @@ def main(page: ft.Page):
 
     # --- ESQUEMA VISUAL GENERAL ---
     for ext in ("esquema_tolva.png", "esquema_tolva.jpg"):
-        if os.path.exists(ext):
+        ruta_ext = buscar_recurso(ext)
+        if ruta_ext:
+            with open(ruta_ext, "rb") as f_ext:
+                bytes_ext = f_ext.read()
             page.add(
                 ft.Text("🗺️ Esquema Guía General de Zonas", size=18, weight="bold", color=ft.Colors.WHITE),
-                ft.Image(src=os.path.abspath(ext), height=280, fit="contain", border_radius=8),
+                ft.Image(src=bytes_ext, height=280, fit="contain", border_radius=8),
                 ft.Text("Plano de Ubicación General de Componentes - Tolva CAT 794 AC", size=11, color=ft.Colors.GREY_400),
                 ft.Divider(height=20, color=ft.Colors.BLUE_GREY_800)
             )
@@ -1090,16 +1241,16 @@ def main(page: ft.Page):
                 if llave_bk not in controles:
                     controles[llave_bk] = ft.TextField(
                         label=f"Código Backlog SAP ({cod_z}):",
-                        value=sugerido, dense=True, expand=2, text_size=12
+                        value=sugerido, dense=True, width=220, text_size=13
                     )
                 contenedor_resumen_ots.controls.append(
-                    ft.Row([
+                    ft.Column([
                         ft.Container(
                             content=ft.Text(f"{prefijo} {desc_z} ({cod_z}) - {val_def}", font_family="Consolas", size=13, color=ft.Colors.BLUE_200),
-                            bgcolor=ft.Colors.BLUE_GREY_900, padding=10, border_radius=6, expand=3
+                            bgcolor=ft.Colors.BLUE_GREY_900, padding=10, border_radius=6
                         ),
                         controles[llave_bk]
-                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                    ], spacing=6)
                 )
 
     for idx_z, zona in enumerate(ESTRUCTURA_ZONAS):
@@ -1107,10 +1258,16 @@ def main(page: ft.Page):
         
         imagenes_row = ft.Row(spacing=20, wrap=True)
         for img_name in zona["esquema"]:
-            ruta_local = os.path.abspath(os.path.join("imagenes_esquemas", img_name))
-            if os.path.exists(ruta_local):
+            ruta_local = buscar_recurso("imagenes_esquemas", img_name)
+            if ruta_local:
+                with open(ruta_local, "rb") as f_loc:
+                    bytes_loc = f_loc.read()
                 imagenes_row.controls.append(
-                    ft.Image(src=ruta_local, height=250, fit="contain", border_radius=8)
+                    ft.Image(src=bytes_loc, height=220, fit="contain", border_radius=8)
+                )
+            else:
+                imagenes_row.controls.append(
+                    ft.Text(f"⚠️ No se encontró el esquema '{img_name}' (carpeta imagenes_esquemas)", size=12, color=ft.Colors.AMBER_400)
                 )
         if imagenes_row.controls:
             page.add(
@@ -1119,33 +1276,18 @@ def main(page: ft.Page):
                 ft.Divider(height=10, color=ft.Colors.TRANSPARENT)
             )
         
-        # Encabezados de las 9 columnas
-        page.add(
-            ft.Row([
-                ft.Text("ZONA", weight="bold", size=11, color=ft.Colors.GREY_400, expand=1),
-                ft.Text("DESCRIPCIÓN", weight="bold", size=11, color=ft.Colors.GREY_400, expand=3),
-                ft.Text("FECHA", weight="bold", size=11, color=ft.Colors.GREY_400, expand=1),
-                ft.Text("DEFECTO", weight="bold", size=11, color=ft.Colors.GREY_400, expand=2),
-                ft.Text("LONG. (mm)", weight="bold", size=11, color=ft.Colors.GREY_400, expand=2),
-                ft.Text("EST. POST.", weight="bold", size=11, color=ft.Colors.GREY_400, expand=2),
-                ft.Text("TÉCNICA", weight="bold", size=11, color=ft.Colors.GREY_400, expand=2),
-                ft.Text("CONDICIÓN", weight="bold", size=11, color=ft.Colors.GREY_400, expand=2),
-                ft.Text("COMENTARIOS", weight="bold", size=11, color=ft.Colors.GREY_400, expand=3),
-            ])
-        )
-
         for idx_i, item in enumerate(zona["items"]):
             cod_z, desc_z, tec_def = item
             key_id = f"z{idx_z}_{idx_i}"
             
-            lbl_cond = ft.Text("ACEPTABLE", weight="bold", size=12, color=ft.Colors.GREEN_400, expand=2)
+            lbl_cond = ft.Text("ACEPTABLE", weight="bold", size=13, color=ft.Colors.GREEN_400)
             
             dd_opclong = ft.Dropdown(
                 options=[ft.dropdown.Option("Manual"), ft.dropdown.Option("VARIOS")],
-                value="Manual", dense=True, text_size=11, visible=False
+                value="Manual", dense=True, text_size=13, visible=False, width=150, label="Tipo de longitud"
             )
-            txt_long = ft.TextField(value="-", disabled=True, dense=True, text_size=12)
-            col_longitud = ft.Column([dd_opclong, txt_long], spacing=4, expand=2)
+            txt_long = ft.TextField(value="-", disabled=True, dense=True, text_size=13, width=150, label="Longitud (mm)")
+            col_longitud = ft.Column([dd_opclong, txt_long], spacing=4, width=150)
 
             def crear_evento_opclong(dd_ol, txt_l):
                 def al_cambiar_ol(e):
@@ -1162,15 +1304,15 @@ def main(page: ft.Page):
 
             dd_est = ft.Dropdown(
                 options=[ft.dropdown.Option("-"), ft.dropdown.Option("NR"), ft.dropdown.Option("R")],
-                value="-", disabled=True, expand=2, dense=True, text_size=12
+                value="-", disabled=True, width=140, dense=True, text_size=13, label="Est. posterior"
             )
             dd_tec = ft.Dropdown(
                 options=[ft.dropdown.Option("VT"), ft.dropdown.Option("VT/PT"), ft.dropdown.Option("VT/UT")],
-                value=tec_def, expand=2, dense=True, text_size=12
+                value=tec_def, width=140, dense=True, text_size=13, label="Técnica NDT"
             )
             dd_com = ft.Dropdown(
                 options=[ft.dropdown.Option("-"), ft.dropdown.Option("CREAR OT"), ft.dropdown.Option("OT CREADA")],
-                value="-", disabled=True, expand=3, dense=True, text_size=12
+                value="-", disabled=True, width=180, dense=True, text_size=13, label="Comentarios"
             )
 
             lbl_pano = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
@@ -1182,15 +1324,9 @@ def main(page: ft.Page):
                 content=ft.Column([
                     ft.Text(f"📷 Fotos de Hallazgo: {desc_z} ({cod_z})", weight="bold", size=12, color=ft.Colors.AMBER_300),
                     ft.Row([
-                        ft.Column([
-                            ft.Button("Subir Foto Panorámica", icon=ft.Icons.CAMERA_ALT, on_click=lambda e, k=f"img_pano_{key_id}": abrir_selector(k)),
-                            lbl_pano
-                        ], expand=1),
-                        ft.Column([
-                            ft.Button("Subir Foto de Detalle", icon=ft.Icons.IMAGE_SEARCH, on_click=lambda e, k=f"img_det_{key_id}": abrir_selector(k)),
-                            lbl_det
-                        ], expand=1)
-                    ])
+                        ft.Column([boton_foto("Foto Panorámica", f"img_pano_{key_id}"), lbl_pano], spacing=4),
+                        ft.Column([boton_foto("Foto de Detalle", f"img_det_{key_id}"), lbl_det], spacing=4),
+                    ], wrap=True, spacing=20, run_spacing=10)
                 ], spacing=6),
                 padding=12, bgcolor=ft.Colors.with_opacity(1, "#161a24"), border_radius=8, visible=False
             )
@@ -1230,7 +1366,7 @@ def main(page: ft.Page):
 
             dd_def = ft.Dropdown(
                 options=[ft.dropdown.Option(x) for x in ["LF", "D", "DE", "DP", "F", "FA"]],
-                value="LF", expand=2, dense=True, text_size=12,
+                value="LF", width=130, dense=True, text_size=13, label="Defecto",
                 on_select=crear_evento_defecto(lbl_cond, dd_opclong, txt_long, dd_est, dd_com, contenedor_fotos_rechazo)
             )
             
@@ -1241,12 +1377,19 @@ def main(page: ft.Page):
             controles[f"tec_{key_id}"] = dd_tec
             controles[f"com_{key_id}"] = dd_com
 
-            fila_datos = ft.Row([
-                ft.Text(cod_z, weight="bold", size=12, expand=1),
-                ft.Text(desc_z, weight="bold", size=12, expand=3),
-                ft.Text(hoy_str, size=12, color=ft.Colors.GREY_300, expand=1),
-                dd_def, col_longitud, dd_est, dd_tec, lbl_cond, dd_com
-            ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            fila_datos = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Text(cod_z, weight="bold", size=15, color=ft.Colors.BLUE_200),
+                        ft.Text(desc_z, weight="bold", size=14, expand=True),
+                        lbl_cond,
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Text(f"Fecha de inspección: {hoy_str}", size=11, color=ft.Colors.GREY_400),
+                    ft.Row([dd_def, col_longitud, dd_est, dd_tec, dd_com], wrap=True, spacing=8, run_spacing=8),
+                ], spacing=6),
+                padding=10, bgcolor=ft.Colors.with_opacity(1, "#121722"), border_radius=8,
+                border=ft.Border.all(1, ft.Colors.BLUE_GREY_800),
+            )
 
             page.add(ft.Column([fila_datos, contenedor_fotos_rechazo], spacing=4))
             page.add(ft.Divider(height=4, color=ft.Colors.TRANSPARENT))
@@ -1263,17 +1406,9 @@ def main(page: ft.Page):
                     content=ft.Column([
                         ft.Text("📷 Letreros Obligatorios Especiales: Laterales RH / LH", weight="bold", color=ft.Colors.YELLOW_600, size=14),
                         ft.Row([
-                            ft.Column([
-                                ft.Text("Letrero Lateral RH (Panorámico)", weight="bold", size=12),
-                                ft.Button("Subir Letrero RH (Panorámico)", icon=ft.Icons.CAMERA_ALT, on_click=lambda e: abrir_selector("img_pano_esp_z2_rh")),
-                                lbl_pano_rh
-                            ], expand=1),
-                            ft.Column([
-                                ft.Text("Letrero Lateral LH (Panorámico)", weight="bold", size=12),
-                                ft.Button("Subir Letrero LH (Panorámico)", icon=ft.Icons.CAMERA_ALT, on_click=lambda e: abrir_selector("img_pano_esp_z2_lh")),
-                                lbl_pano_lh
-                            ], expand=1),
-                        ])
+                            ft.Column([boton_foto("Letrero Lateral RH (Panorámico)", "img_pano_esp_z2_rh"), lbl_pano_rh], spacing=4),
+                            ft.Column([boton_foto("Letrero Lateral LH (Panorámico)", "img_pano_esp_z2_lh"), lbl_pano_lh], spacing=4),
+                        ], wrap=True, spacing=20, run_spacing=10)
                     ], spacing=8),
                     padding=15, bgcolor=ft.Colors.BLUE_GREY_900, border_radius=8
                 )
@@ -1286,17 +1421,13 @@ def main(page: ft.Page):
                 ft.Container(
                     content=ft.Column([
                         ft.Text("📷 Letrero Obligatorio Especial: Posterior", weight="bold", color=ft.Colors.YELLOW_600, size=14),
-                        ft.Row([
-                            ft.Column([
-                                ft.Text("Letrero Posterior (Panorámico)", weight="bold", size=12),
-                                ft.Button("Subir Letrero Posterior (Panorámico)", icon=ft.Icons.CAMERA_ALT, on_click=lambda e: abrir_selector("img_pano_esp_z8_post")),
-                                lbl_pano_post
-                            ], expand=1),
+                        ft.Column([
+                            ft.Column([boton_foto("Letrero Posterior (Panorámico)", "img_pano_esp_z8_post"), lbl_pano_post], spacing=4),
                             ft.Container(
                                 content=ft.Text("ℹ️ Requerido para la zona posterior (Z08). El campo 'Detalle' en el Excel se llenará automáticamente con '-'.", size=12, color=ft.Colors.BLUE_200),
-                                bgcolor=ft.Colors.BLUE_900, padding=10, border_radius=6, expand=1
+                                bgcolor=ft.Colors.BLUE_900, padding=10, border_radius=6
                             )
-                        ])
+                        ], spacing=8)
                     ], spacing=8),
                     padding=15, bgcolor=ft.Colors.BLUE_GREY_900, border_radius=8
                 )
@@ -1355,10 +1486,13 @@ def main(page: ft.Page):
     # ==========================================================================
     texto_estado = ft.Text("", size=16, weight="bold")
     
-    def procesar_todo(e):
-        ruta_plantilla = "plantilla_tolva.xlsx"
-        if not os.path.exists(ruta_plantilla):
-            texto_estado.value = f"❌ No se encontró '{ruta_plantilla}' en la carpeta del proyecto."
+    async def procesar_todo(e):
+        ruta_plantilla = buscar_recurso("plantilla_tolva.xlsx")
+        if not ruta_plantilla:
+            texto_estado.value = (
+                "❌ No se encontró 'plantilla_tolva.xlsx' dentro de la app.\n"
+                "Archivos que veo:\n" + diagnostico_archivos()
+            )
             texto_estado.color = ft.Colors.RED_400
             page.update()
             return
@@ -1429,7 +1563,8 @@ def main(page: ft.Page):
                         columns=[f"Eje {j+1}" for j in range(7)]
                     )
 
-            excel_bytes, avisos = generar_reporte_excel(
+            excel_bytes, avisos = await asyncio.to_thread(
+                lambda: generar_reporte_excel(
                 ruta_plantilla=ruta_plantilla,
                 cliente=cliente_final,
                 lugar=lugar_final,
@@ -1446,14 +1581,32 @@ def main(page: ft.Page):
                 firma_ruta=rutas_fotos.get("firma_upload"),
                 todos_los_rechazos=todos_los_rechazos,
                 matriz_espesores=df_matriz_final
+                )
             )
             
             fecha_limpia = txt_fecha_insp.value.strip().replace("/", "")
-            ruta_salida = f"{cod_inf_final}_{fecha_limpia}.xlsx"
-            with open(ruta_salida, "wb") as f:
-                f.write(excel_bytes)
-                
-            msg = f"✅ Reporte Excel generado correctamente: {ruta_salida}"
+            nombre_salida = f"{cod_inf_final}_{fecha_limpia}.xlsx"
+            texto_estado.value = "💾 Elige dónde guardar el Excel..."
+            page.update()
+            ruta_guardada = await selector_fotos.save_file(
+                dialog_title="Guardar reporte Excel",
+                file_name=nombre_salida,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["xlsx"],
+                src_bytes=excel_bytes,
+            )
+            if not page.web and not es_movil():
+                # En PC el selector solo devuelve la ruta: escribimos el archivo nosotros.
+                ruta_guardada = ruta_guardada or nombre_salida
+                with open(ruta_guardada, "wb") as f:
+                    f.write(excel_bytes)
+            if not ruta_guardada and not page.web:
+                texto_estado.value = "⚠️ Guardado cancelado. Vuelve a pulsar el botón para elegir dónde guardarlo."
+                texto_estado.color = ft.Colors.AMBER_400
+                page.update()
+                return
+
+            msg = f"✅ Reporte Excel generado correctamente: {ruta_guardada or nombre_salida}"
             if avisos:
                 msg += "\n" + "\n".join(avisos)
             texto_estado.value = msg
