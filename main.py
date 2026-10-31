@@ -8,11 +8,19 @@ import os
 import io
 import asyncio
 import tempfile
+import math
 import zipfile
 import re
 import json
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw
+import flet.canvas as cv
 from datetime import date
+
+try:  # opcional: si el APK incluye pillow-heif, también se leen fotos .heic
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except Exception:
+    pass
 
 # ==============================================================================
 # 1. BASE DE DATOS LOCAL Y CONSTANTES FIELES AL ORIGINAL
@@ -890,32 +898,295 @@ def main(page: ft.Page):
             controles[llave].color = ft.Colors.RED_400
         page.update()
 
+    MSG_FORMATO = "Formato de imagen no compatible (¿HEIC?). Usa 📷 Cámara, o en la cámara del teléfono elige formato JPEG / 'más compatible'"
+
     async def seleccionar_async(llave):
         try:
             archivos = await selector_fotos.pick_files(
                 allow_multiple=False,
                 file_type=ft.FilePickerFileType.IMAGE,
             )
-            if archivos and archivos[0].path:
-                marcar_foto(llave, archivos[0].path, archivos[0].name)
-            elif archivos:
+            if not archivos:
+                return
+            f0 = archivos[0]
+            if not f0.path:
                 marcar_error(llave, "No se pudo leer la ruta del archivo")
+                return
+            with open(f0.path, "rb") as fh:
+                datos = fh.read()
+            if llave == "firma_upload":
+                try:
+                    abrir_imagen(datos)
+                except Exception:
+                    marcar_error(llave, MSG_FORMATO)
+                    return
+                marcar_foto(llave, f0.path, f0.name)
+            else:
+                procesar_foto(llave, datos, f0.name)
         except Exception as ex:
             marcar_error(llave, f"Selector: {ex}")
 
     def abrir_selector(llave):
         page.run_task(seleccionar_async, llave)
 
-    def guardar_foto_bytes(llave, datos):
+    # --- Cambios de tamaño / rotación de pantalla ---
+    resize_cbs = []
+
+    def _on_resize(e=None):
+        for cb in list(resize_cbs):
+            try:
+                cb()
+            except Exception:
+                pass
+
+    try:
+        page.on_resize = _on_resize
+    except Exception:
+        pass
+
+    def tam_pantalla():
+        return (page.width or 360), (page.height or 640)
+
+    # --- Utilidades de imagen ---
+    def abrir_imagen(datos):
         im = Image.open(io.BytesIO(datos))
-        im = ImageOps.exif_transpose(im).convert("RGB")
-        im.thumbnail((2000, 2000))
+        return ImageOps.exif_transpose(im).convert("RGB")
+
+    def guardar_jpeg(llave, im):
         carpeta = os.environ.get("FLET_APP_STORAGE_TEMP") or tempfile.gettempdir()
         os.makedirs(carpeta, exist_ok=True)
         ruta = os.path.join(carpeta, f"{llave}.jpg")
         im.save(ruta, "JPEG", quality=88)
         return ruta
 
+    def procesar_foto(llave, datos, nombre):
+        try:
+            im = abrir_imagen(datos)
+            im.thumbnail((2000, 2000))
+        except Exception:
+            marcar_error(llave, MSG_FORMATO)
+            return
+        abrir_editor(llave, im, nombre)
+
+    # --- Editor de anotaciones (rectángulo, círculo, flecha, lápiz) ---
+    def abrir_editor(llave, im, nombre):
+        iw, ih = im.size
+        vista = im.copy()
+        vista.thumbnail((1400, 1400))
+        buf = io.BytesIO()
+        vista.save(buf, "JPEG", quality=80)
+        grosor_img = max(4, iw // 200)
+        COLORES = ["#FF1744", "#FFEA00", "#00E676", "#FFFFFF"]
+        est = {"herr": "rect", "color": COLORES[0], "actual": None, "dw": 1.0, "dh": 1.0}
+        formas = []
+
+        img_ctl = ft.Image(src=buf.getvalue(), fit=ft.BoxFit.FILL)
+
+        def clamp01(v):
+            return max(0.0, min(1.0, v))
+
+        def punta_flecha(x0, y0, x1, y1, largo):
+            ang = math.atan2(y1 - y0, x1 - x0)
+            t = math.radians(25)
+            p1 = (x1 - largo * math.cos(ang - t), y1 - largo * math.sin(ang - t))
+            p2 = (x1 - largo * math.cos(ang + t), y1 - largo * math.sin(ang + t))
+            return p1, p2
+
+        def a_cv(f):
+            dw, dh = est["dw"], est["dh"]
+            g = max(2.5, grosor_img * dw / iw)
+            paint = ft.Paint(color=f["color"], stroke_width=g, style=ft.PaintingStyle.STROKE)
+            d = f["datos"]
+            if f["tipo"] == "lapiz":
+                pts = [(x * dw, y * dh) for x, y in d]
+                if len(pts) < 2:
+                    return []
+                els = [cv.Path.MoveTo(pts[0][0], pts[0][1])] + [cv.Path.LineTo(x, y) for x, y in pts[1:]]
+                return [cv.Path(els, paint=paint)]
+            x0, y0, x1, y1 = d[0] * dw, d[1] * dh, d[2] * dw, d[3] * dh
+            if f["tipo"] == "rect":
+                return [cv.Rect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0), paint=paint)]
+            if f["tipo"] == "oval":
+                return [cv.Oval(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0), paint=paint)]
+            p1, p2 = punta_flecha(x0, y0, x1, y1, max(14.0, g * 5))
+            return [
+                cv.Line(x0, y0, x1, y1, paint=paint),
+                cv.Line(x1, y1, p1[0], p1[1], paint=paint),
+                cv.Line(x1, y1, p2[0], p2[1], paint=paint),
+            ]
+
+        def dibujar():
+            shapes = []
+            for f in formas + ([est["actual"]] if est["actual"] else []):
+                shapes.extend(a_cv(f))
+            lienzo.shapes = shapes
+            lienzo.update()
+
+        def pan_start(e):
+            x = clamp01(e.local_position.x / est["dw"])
+            y = clamp01(e.local_position.y / est["dh"])
+            if est["herr"] == "lapiz":
+                est["actual"] = {"tipo": "lapiz", "color": est["color"], "datos": [(x, y)]}
+            else:
+                est["actual"] = {"tipo": est["herr"], "color": est["color"], "datos": [x, y, x, y]}
+
+        def pan_update(e):
+            f = est["actual"]
+            if not f:
+                return
+            x = clamp01(e.local_position.x / est["dw"])
+            y = clamp01(e.local_position.y / est["dh"])
+            if f["tipo"] == "lapiz":
+                f["datos"].append((x, y))
+            else:
+                f["datos"][2], f["datos"][3] = x, y
+            dibujar()
+
+        def pan_end(e=None):
+            f = est["actual"]
+            est["actual"] = None
+            if f:
+                d = f["datos"]
+                valido = len(d) > 3 if f["tipo"] == "lapiz" else (abs(d[2] - d[0]) > 0.006 or abs(d[3] - d[1]) > 0.006)
+                if valido:
+                    formas.append(f)
+            dibujar()
+
+        lienzo = cv.Canvas(
+            shapes=[],
+            content=ft.GestureDetector(
+                on_pan_start=pan_start, on_pan_update=pan_update, on_pan_end=pan_end, drag_interval=15
+            ),
+        )
+        area = ft.Stack([img_ctl, lienzo])
+
+        # --- barra de herramientas ---
+        botones_herr = {}
+
+        def elegir_herr(h):
+            est["herr"] = h
+            for k, b_ in botones_herr.items():
+                b_.icon_color = ft.Colors.AMBER_400 if k == h else ft.Colors.WHITE
+            page.update()
+
+        for clave, icono, tip in [
+            ("rect", ft.Icons.CROP_SQUARE, "Rectángulo"),
+            ("oval", ft.Icons.PANORAMA_FISH_EYE, "Círculo"),
+            ("flecha", ft.Icons.NORTH_EAST, "Flecha"),
+            ("lapiz", ft.Icons.EDIT, "Lápiz"),
+        ]:
+            botones_herr[clave] = ft.IconButton(
+                icon=icono, tooltip=tip, icon_color=ft.Colors.WHITE,
+                on_click=lambda e, c=clave: elegir_herr(c),
+            )
+        botones_herr["rect"].icon_color = ft.Colors.AMBER_400
+
+        chips = {}
+
+        def elegir_color(c):
+            est["color"] = c
+            for k, ch in chips.items():
+                ch.border = ft.Border.all(3, ft.Colors.WHITE if k == c else ft.Colors.TRANSPARENT)
+            page.update()
+
+        for c in COLORES:
+            chips[c] = ft.Container(
+                width=30, height=30, bgcolor=c, border_radius=15,
+                border=ft.Border.all(3, ft.Colors.WHITE if c == COLORES[0] else ft.Colors.TRANSPARENT),
+                on_click=lambda e, c=c: elegir_color(c),
+            )
+
+        def deshacer(e=None):
+            if formas:
+                formas.pop()
+                dibujar()
+
+        def borrar_todo(e=None):
+            formas.clear()
+            dibujar()
+
+        def cerrar_editor(e=None):
+            if raiz in page.overlay:
+                page.overlay.remove(raiz)
+            if ubicar in resize_cbs:
+                resize_cbs.remove(ubicar)
+            page.update()
+
+        def guardar(anotar):
+            try:
+                salida = im.copy()
+                if anotar and formas:
+                    d = ImageDraw.Draw(salida)
+                    for f in formas:
+                        col = f["color"]
+                        dd = f["datos"]
+                        if f["tipo"] == "lapiz":
+                            pts = [(x * iw, y * ih) for x, y in dd]
+                            if len(pts) > 1:
+                                d.line(pts, fill=col, width=grosor_img, joint="curve")
+                            continue
+                        x0, y0, x1, y1 = dd[0] * iw, dd[1] * ih, dd[2] * iw, dd[3] * ih
+                        if f["tipo"] == "rect":
+                            d.rectangle([min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)], outline=col, width=grosor_img)
+                        elif f["tipo"] == "oval":
+                            d.ellipse([min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)], outline=col, width=grosor_img)
+                        else:
+                            p1, p2 = punta_flecha(x0, y0, x1, y1, max(14.0, grosor_img * 5))
+                            d.line([(x0, y0), (x1, y1)], fill=col, width=grosor_img)
+                            d.line([(x1, y1), p1], fill=col, width=grosor_img)
+                            d.line([(x1, y1), p2], fill=col, width=grosor_img)
+                ruta = guardar_jpeg(llave, salida)
+                cerrar_editor()
+                marcar_foto(llave, ruta, nombre + (" (anotada)" if anotar and formas else ""))
+            except Exception as ex:
+                marcar_error(llave, f"No se pudo guardar la foto: {ex}")
+                cerrar_editor()
+
+        barra = ft.Container(
+            bgcolor=ft.Colors.with_opacity(0.85, ft.Colors.BLACK), padding=8,
+            content=ft.Column([
+                ft.Row(list(botones_herr.values()) + [
+                    ft.IconButton(icon=ft.Icons.UNDO, tooltip="Deshacer", icon_color=ft.Colors.WHITE, on_click=deshacer),
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Borrar todo", icon_color=ft.Colors.WHITE, on_click=borrar_todo),
+                ], wrap=True, spacing=0, run_spacing=0),
+                ft.Row(list(chips.values()), spacing=10),
+                ft.Row([
+                    ft.FilledButton("Guardar", icon=ft.Icons.CHECK, on_click=lambda e: guardar(True)),
+                    ft.OutlinedButton("Sin anotar", on_click=lambda e: guardar(False)),
+                    ft.TextButton("Cancelar", on_click=cerrar_editor),
+                ], wrap=True, spacing=6, run_spacing=4),
+            ], spacing=6),
+        )
+        caja = ft.Container(content=area, alignment=ft.Alignment.CENTER, left=0, top=0, right=0, bottom=0)
+
+        def ubicar():
+            W, H = tam_pantalla()
+            horiz = W > H
+            if horiz:
+                disp_w, disp_h = W - 240, H - 24
+                barra.left, barra.right, barra.top, barra.bottom, barra.width = None, 0, 0, 0, 230
+                caja.right, caja.bottom = 230, 0
+            else:
+                disp_w, disp_h = W - 16, H - 230
+                barra.left, barra.right, barra.top, barra.bottom, barra.width = 0, 0, None, 0, None
+                caja.right, caja.bottom = 0, 200
+            esc = max(0.05, min(disp_w / iw, disp_h / ih))
+            dw, dh = iw * esc, ih * esc
+            est["dw"], est["dh"] = dw, dh
+            for c_ in (img_ctl, lienzo, area):
+                c_.width, c_.height = dw, dh
+            dibujar()
+
+        raiz = ft.Container(
+            expand=True, bgcolor=ft.Colors.BLACK,
+            content=ft.SafeArea(content=ft.Stack([caja, barra], expand=True), expand=True),
+        )
+        resize_cbs.append(ubicar)
+        page.overlay.append(raiz)
+        ubicar()
+        page.update()
+
+    # --- Cámara a pantalla completa con zoom y selector de lente ---
     async def camara_async(llave):
         try:
             import flet_camera as fc
@@ -924,28 +1195,101 @@ def main(page: ft.Page):
             return
 
         camara = fc.Camera(expand=True, preview_enabled=True)
-        estado_cam = ft.Text("Iniciando cámara...", size=12)
+        estado_cam = ft.Text("Iniciando cámara...", size=12, color=ft.Colors.WHITE)
         btn_tomar = ft.FilledButton("Tomar foto", icon=ft.Icons.PHOTO_CAMERA, disabled=True)
-        btn_cerrar = ft.TextButton("Cancelar")
-        dialogo = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Tomar foto"),
-            content=ft.Container(
-                width=320, height=440,
-                content=ft.Column(
-                    [ft.Container(content=camara, expand=True, bgcolor=ft.Colors.BLACK, border_radius=6), estado_cam],
-                    spacing=8,
-                ),
-            ),
-            actions=[btn_tomar, btn_cerrar],
+        etq_zoom = ft.Text("Zoom 1.0x", size=12, color=ft.Colors.WHITE)
+        sld_zoom = ft.Slider(min=1, max=2, value=1, disabled=True)
+        fila_zoom = ft.Row(wrap=True, spacing=4, run_spacing=4)
+        dd_cam = ft.Dropdown(label="Cámara / lente", width=210, dense=True, text_size=13, visible=False)
+        lista_camaras = []
+
+        panel = ft.Container(
+            bgcolor=ft.Colors.with_opacity(0.65, ft.Colors.BLACK), padding=10,
+            content=ft.Column([
+                estado_cam, etq_zoom, sld_zoom, fila_zoom, dd_cam,
+                ft.Row([btn_tomar, ft.TextButton("Cancelar", on_click=lambda e: cerrar())], wrap=True, spacing=8),
+            ], spacing=6, scroll=ft.ScrollMode.AUTO),
+        )
+        fondo = ft.Container(content=camara, bgcolor=ft.Colors.BLACK, left=0, top=0, right=0, bottom=0)
+
+        def ubicar():
+            W, H = tam_pantalla()
+            if W > H:
+                panel.left, panel.right, panel.top, panel.bottom, panel.width = None, 0, 0, 0, 230
+            else:
+                panel.left, panel.right, panel.top, panel.bottom, panel.width = 0, 0, None, 0, None
+
+        raiz = ft.Container(
+            expand=True, bgcolor=ft.Colors.BLACK,
+            content=ft.SafeArea(content=ft.Stack([fondo, panel], expand=True), expand=True),
         )
 
-        def cerrar(e=None):
+        def cerrar():
+            if raiz in page.overlay:
+                page.overlay.remove(raiz)
+            if _redib in resize_cbs:
+                resize_cbs.remove(_redib)
+            page.update()
+
+        def _redib():
+            ubicar()
+            page.update()
+
+        async def poner_zoom(z):
             try:
-                page.pop_dialog()
-            except Exception:
-                dialogo.open = False
+                sld_zoom.value = z
+                etq_zoom.value = f"Zoom {z:.1f}x"
                 page.update()
+                await camara.set_zoom_level(z)
+            except Exception as ex:
+                estado_cam.value = f"Zoom no disponible: {ex}"
+                page.update()
+
+        async def cambiar_zoom(e):
+            await poner_zoom(float(e.control.value))
+
+        sld_zoom.on_change = cambiar_zoom
+
+        def etiqueta_camara(c, n):
+            if c.lens_direction == fc.CameraLensDirection.BACK:
+                base = "Trasera"
+            elif c.lens_direction == fc.CameraLensDirection.FRONT:
+                base = "Frontal"
+            else:
+                base = "Externa"
+            extra = " (gran angular)" if getattr(getattr(c, "lens_type", None), "value", "") == "ultraWide" else ""
+            return f"{base} {n}{extra}"
+
+        async def iniciar(desc):
+            btn_tomar.disabled = True
+            estado_cam.value = "Iniciando cámara..."
+            page.update()
+            await camara.initialize(
+                description=desc,
+                resolution_preset=fc.ResolutionPreset.HIGH,
+                enable_audio=False,
+                image_format_group=fc.ImageFormatGroup.JPEG,
+            )
+            try:
+                mn = float(await camara.get_min_zoom_level())
+                mx = min(float(await camara.get_max_zoom_level()), 10.0)
+            except Exception:
+                mn, mx = 1.0, 1.0
+            if mx - mn > 0.05:
+                sld_zoom.min, sld_zoom.max = mn, mx
+                sld_zoom.value = min(max(1.0, mn), mx)
+                sld_zoom.disabled = False
+            else:
+                sld_zoom.min, sld_zoom.max, sld_zoom.value = 1, 2, 1
+                sld_zoom.disabled = True
+            etq_zoom.value = f"Zoom {float(sld_zoom.value):.1f}x"
+            fila_zoom.controls = [
+                ft.OutlinedButton(f"{z:g}x", on_click=lambda e, z=z: page.run_task(poner_zoom, float(z)))
+                for z in (0.5, 1, 2, 3, 5) if mn - 0.01 <= z <= mx + 0.01 and mx - mn > 0.05
+            ]
+            btn_tomar.disabled = False
+            estado_cam.value = "Cámara lista"
+            page.update()
 
         async def tomar(e=None):
             try:
@@ -953,34 +1297,41 @@ def main(page: ft.Page):
                 estado_cam.value = "Capturando..."
                 page.update()
                 datos = await camara.take_picture()
-                ruta = guardar_foto_bytes(llave, datos)
                 cerrar()
-                marcar_foto(llave, ruta, "foto de cámara")
+                procesar_foto(llave, datos, "foto de cámara")
             except Exception as ex:
                 estado_cam.value = f"Error al capturar: {ex}"
                 btn_tomar.disabled = False
                 page.update()
 
+        async def cambiar_camara(e):
+            c = next((x for x in lista_camaras if x.name == dd_cam.value), None)
+            if c:
+                try:
+                    await iniciar(c)
+                except Exception as ex:
+                    estado_cam.value = f"No se pudo cambiar de cámara: {ex}"
+                    page.update()
+
         btn_tomar.on_click = tomar
-        btn_cerrar.on_click = cerrar
-        page.show_dialog(dialogo)
+        dd_cam.on_select = cambiar_camara
+        resize_cbs.append(_redib)
+        ubicar()
+        page.overlay.append(raiz)
+        page.update()
 
         try:
-            lista = await camara.get_available_cameras()
-            if not lista:
+            lista_camaras.extend(await camara.get_available_cameras())
+            if not lista_camaras:
                 estado_cam.value = "No se encontró ninguna cámara"
                 page.update()
                 return
-            elegida = next((c for c in lista if c.lens_direction == fc.CameraLensDirection.BACK), lista[0])
-            await camara.initialize(
-                description=elegida,
-                resolution_preset=fc.ResolutionPreset.HIGH,
-                enable_audio=False,
-                image_format_group=fc.ImageFormatGroup.JPEG,
-            )
-            btn_tomar.disabled = False
-            estado_cam.value = "Cámara lista"
-            page.update()
+            elegida = next((c for c in lista_camaras if c.lens_direction == fc.CameraLensDirection.BACK), lista_camaras[0])
+            if len(lista_camaras) > 1:
+                dd_cam.options = [ft.DropdownOption(key=c.name, text=etiqueta_camara(c, i + 1)) for i, c in enumerate(lista_camaras)]
+                dd_cam.value = elegida.name
+                dd_cam.visible = True
+            await iniciar(elegida)
         except Exception as ex:
             estado_cam.value = f"No se pudo iniciar la cámara: {ex}"
             page.update()
