@@ -82,6 +82,11 @@ def guardar_db(data):
 
 ROTAR_FOTOS_VERTICALES = False
 
+# Qué porción del recuadro (Panorámico / Detalle) ocupa la foto en el Excel.
+# 0.80 = la foto cabe dentro del 80 % del ancho y del alto del recuadro.
+FACTOR_FOTO_HORIZONTAL = 0.80
+FACTOR_FOTO_VERTICAL = 0.88
+
 _NOMBRE_COMPLETO_DEFECTO = {
     "D": "DESPRENDIMIENTO",
     "DE": "DESGASTE",
@@ -373,7 +378,8 @@ class _Geometria:
             r += 1
 
 def _anchor_imagen_ajustada_xml(geo, id_imagen, nombre, rid, bytes_img,
-                                col_ini, col_fin, fila_ini, fila_fin, margen=60000):
+                                col_ini, col_fin, fila_ini, fila_fin, margen=60000,
+                                factor_h=1.0, factor_v=1.0):
     iw, ih = Image.open(io.BytesIO(bytes_img)).size
     x0, x1 = geo.x(col_ini), geo.x(col_fin)
     y0, y1 = geo.y(fila_ini), geo.y(fila_fin)
@@ -381,7 +387,7 @@ def _anchor_imagen_ajustada_xml(geo, id_imagen, nombre, rid, bytes_img,
     alto = y1 - y0 - 2 * margen
     if ancho <= 0 or alto <= 0 or iw <= 0 or ih <= 0:
         return ""
-    esc = min(ancho / iw, alto / ih)
+    esc = min(ancho / iw, alto / ih) * (factor_h if iw >= ih else factor_v)
     cx, cy = int(iw * esc), int(ih * esc)
     px = x0 + margen + (ancho - cx) // 2
     py = y0 + margen + (alto - cy) // 2
@@ -825,7 +831,8 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         anchors_nuevos_xml += _anchor_imagen_ajustada_xml(
             geo, id_shape, "FotoApp", rid_actual, foto["bytes_png"],
             foto["col_0idx"], foto["col_0idx"] + foto["col_span"],
-            foto["fila_0idx"], foto["fila_0idx"] + foto["row_span"], margen=100000
+            foto["fila_0idx"], foto["fila_0idx"] + foto["row_span"], margen=100000,
+            factor_h=FACTOR_FOTO_HORIZONTAL, factor_v=FACTOR_FOTO_VERTICAL
         )
         siguiente_rid += 1
         id_shape += 1
@@ -1096,6 +1103,20 @@ def main(page: ft.Page):
                 on_click=lambda e, c=c: elegir_color(c),
             )
 
+        def rotar(sentido):
+            nonlocal im, iw, ih, grosor_img
+            im = im.rotate(-90 * sentido, expand=True)
+            iw, ih = im.size
+            grosor_img = max(4, iw // 200)
+            v2 = im.copy()
+            v2.thumbnail((1400, 1400))
+            b2 = io.BytesIO()
+            v2.save(b2, "JPEG", quality=80)
+            img_ctl.src = b2.getvalue()
+            formas.clear()
+            ubicar()
+            page.update()
+
         def deshacer(e=None):
             if formas:
                 formas.pop()
@@ -1146,6 +1167,8 @@ def main(page: ft.Page):
             bgcolor=ft.Colors.with_opacity(0.85, ft.Colors.BLACK), padding=8,
             content=ft.Column([
                 ft.Row(list(botones_herr.values()) + [
+                    ft.IconButton(icon=ft.Icons.ROTATE_LEFT, tooltip="Girar a la izquierda", icon_color=ft.Colors.WHITE, on_click=lambda e: rotar(-1)),
+                    ft.IconButton(icon=ft.Icons.ROTATE_RIGHT, tooltip="Girar a la derecha", icon_color=ft.Colors.WHITE, on_click=lambda e: rotar(1)),
                     ft.IconButton(icon=ft.Icons.UNDO, tooltip="Deshacer", icon_color=ft.Colors.WHITE, on_click=deshacer),
                     ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Borrar todo", icon_color=ft.Colors.WHITE, on_click=borrar_todo),
                 ], wrap=True, spacing=0, run_spacing=0),
@@ -1210,14 +1233,27 @@ def main(page: ft.Page):
                 ft.Row([btn_tomar, ft.TextButton("Cancelar", on_click=lambda e: cerrar())], wrap=True, spacing=8),
             ], spacing=6, scroll=ft.ScrollMode.AUTO),
         )
-        fondo = ft.Container(content=camara, bgcolor=ft.Colors.BLACK, left=0, top=0, right=0, bottom=0)
+        RATIO_CAM = 16 / 9  # los presets HIGH / VERY_HIGH de la cámara son 16:9
+        caja_cam = ft.Container(content=camara, bgcolor=ft.Colors.BLACK)
+        fondo = ft.Container(content=caja_cam, left=0, top=0, right=0, bottom=0)
 
         def ubicar():
             W, H = tam_pantalla()
             if W > H:
                 panel.left, panel.right, panel.top, panel.bottom, panel.width = None, 0, 0, 0, 230
+                disp_w, disp_h = W - 240, H - 30
+                bh = min(disp_h, disp_w / RATIO_CAM)
+                bw = bh * RATIO_CAM
+                fondo.right = 230
+                fondo.alignment = ft.Alignment.CENTER
             else:
                 panel.left, panel.right, panel.top, panel.bottom, panel.width = 0, 0, None, 0, None
+                disp_w, disp_h = W, H - 40
+                bw = min(disp_w, disp_h / RATIO_CAM)
+                bh = bw * RATIO_CAM
+                fondo.right = 0
+                fondo.alignment = ft.Alignment.TOP_CENTER
+            caja_cam.width, caja_cam.height = max(bw, 50), max(bh, 50)
 
         raiz = ft.Container(
             expand=True, bgcolor=ft.Colors.BLACK,
@@ -1266,10 +1302,13 @@ def main(page: ft.Page):
             page.update()
             await camara.initialize(
                 description=desc,
-                resolution_preset=fc.ResolutionPreset.HIGH,
+                resolution_preset=fc.ResolutionPreset.VERY_HIGH,
                 enable_audio=False,
                 image_format_group=fc.ImageFormatGroup.JPEG,
             )
+            await leer_zoom()
+
+        async def leer_zoom():
             try:
                 mn = float(await camara.get_min_zoom_level())
                 mx = min(float(await camara.get_max_zoom_level()), 10.0)
@@ -1308,7 +1347,14 @@ def main(page: ft.Page):
             c = next((x for x in lista_camaras if x.name == dd_cam.value), None)
             if c:
                 try:
-                    await iniciar(c)
+                    btn_tomar.disabled = True
+                    estado_cam.value = "Cambiando de lente..."
+                    page.update()
+                    try:
+                        await camara.set_description(c)
+                        await leer_zoom()
+                    except Exception:
+                        await iniciar(c)
                 except Exception as ex:
                     estado_cam.value = f"No se pudo cambiar de cámara: {ex}"
                     page.update()
