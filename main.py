@@ -82,10 +82,15 @@ def guardar_db(data):
 
 ROTAR_FOTOS_VERTICALES = False
 
-# Qué porción del recuadro (Panorámico / Detalle) ocupa la foto en el Excel.
-# 0.80 = la foto cabe dentro del 80 % del ancho y del alto del recuadro.
-FACTOR_FOTO_HORIZONTAL = 0.80
-FACTOR_FOTO_VERTICAL = 0.88
+# Cómo se acomodan las fotos en los recuadros PANORAMICO / DETALLE del Excel.
+# La foto crece hasta ALTO_FOTO del alto del recuadro (sin tocar los bordes).
+# Si así queda más angosta que ANCHO_MIN_FOTO del ancho, se recorta (centrada, arriba y abajo)
+# lo justo para llegar a ese ancho SIN deformar la imagen, pero nunca más de RECORTE_MAX_*
+# (0.35 = como máximo se pierde el 35 % del alto de la foto; 0 = nunca recortar).
+ALTO_FOTO = 0.95
+ANCHO_MIN_FOTO = 0.80
+RECORTE_MAX_HORIZONTAL = 0.35
+RECORTE_MAX_VERTICAL = 0.0
 
 _NOMBRE_COMPLETO_DEFECTO = {
     "D": "DESPRENDIMIENTO",
@@ -379,7 +384,7 @@ class _Geometria:
 
 def _anchor_imagen_ajustada_xml(geo, id_imagen, nombre, rid, bytes_img,
                                 col_ini, col_fin, fila_ini, fila_fin, margen=60000,
-                                factor_h=1.0, factor_v=1.0):
+                                es_foto=False):
     iw, ih = Image.open(io.BytesIO(bytes_img)).size
     x0, x1 = geo.x(col_ini), geo.x(col_fin)
     y0, y1 = geo.y(fila_ini), geo.y(fila_fin)
@@ -387,8 +392,29 @@ def _anchor_imagen_ajustada_xml(geo, id_imagen, nombre, rid, bytes_img,
     alto = y1 - y0 - 2 * margen
     if ancho <= 0 or alto <= 0 or iw <= 0 or ih <= 0:
         return ""
-    esc = min(ancho / iw, alto / ih) * (factor_h if iw >= ih else factor_v)
-    cx, cy = int(iw * esc), int(ih * esc)
+    recorte_arriba_abajo = 0
+    if es_foto:
+        alto_obj = alto * ALTO_FOTO
+        ancho_obj = ancho * ANCHO_MIN_FOTO
+        esc = min(ancho / iw, alto_obj / ih)
+        recorte_max = RECORTE_MAX_HORIZONTAL if iw >= ih else RECORTE_MAX_VERTICAL
+        if iw * esc < ancho_obj and recorte_max > 0:
+            asp_img, asp_obj = iw / ih, ancho_obj / alto_obj
+            if asp_obj > asp_img:
+                conserva = max(asp_img / asp_obj, 1 - recorte_max)
+                vis_h = ih * conserva
+                esc = min(ancho / iw, alto_obj / vis_h)
+                cx, cy = int(iw * esc), int(vis_h * esc)
+                recorte_arriba_abajo = int((1 - conserva) / 2 * 100000)
+            else:
+                cx, cy = int(iw * esc), int(ih * esc)
+        else:
+            cx, cy = int(iw * esc), int(ih * esc)
+    else:
+        esc = min(ancho / iw, alto / ih)
+        cx, cy = int(iw * esc), int(ih * esc)
+    src_rect = f'<a:srcRect t="{recorte_arriba_abajo}" b="{recorte_arriba_abajo}"/>' if recorte_arriba_abajo else ''
+    
     px = x0 + margen + (ancho - cx) // 2
     py = y0 + margen + (alto - cy) // 2
     c, c_off = geo.col_en(px)
@@ -401,7 +427,7 @@ def _anchor_imagen_ajustada_xml(geo, id_imagen, nombre, rid, bytes_img,
         f'<xdr:pic>'
         f'<xdr:nvPicPr><xdr:cNvPr id="{id_imagen}" name="{nombre}{id_imagen}"/>'
         f'<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>'
-        f'<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{rid}"/>'
+        f'<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{rid}"/>{src_rect}'
         f'<a:stretch><a:fillRect/></a:stretch></xdr:blipFill>'
         f'<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
         f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>'
@@ -437,7 +463,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     ws["P6"] = revision
     ws["P7"] = pm
 
-    # --- MEDICIÓN DE ESPESORES (MATRIZ 8x7 EN COLUMNAS K a R JUNTO A ZONA 1) ---
+    # --- MEDICIÓN DE ESPESORES (MATRIZ DE 8 COLUMNAS X 7 FILAS, COLUMNAS J a R JUNTO A ZONA 1) ---
     matriz_espesores_omitida = False
     if es_pm_espesores(pm) and matriz_espesores is not None:
         merge_fondo_diagrama = None
@@ -453,42 +479,42 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                 fila_ini_fondo = merge_fondo_diagrama.min_row
                 fila_fin_fondo = merge_fondo_diagrama.max_row
                 ws.unmerge_cells(str(merge_fondo_diagrama))
-                ws.merge_cells(start_row=fila_ini_fondo, start_column=1, end_row=fila_fin_fondo, end_column=10)
+                ws.merge_cells(start_row=fila_ini_fondo, start_column=1, end_row=fila_fin_fondo, end_column=9)
 
-                col_matriz = 11  # K
+                col_matriz = 10  # J (columna de rótulos); los 8 valores van en K..R
                 borde = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
                 borde_titulo = Border(left=Side(style="medium"), right=Side(style="medium"), top=Side(style="medium"), bottom=Side(style="medium"))
                 align = Alignment(horizontal="center", vertical="center")
 
                 alto_disponible = fila_fin_fondo - fila_ini_fondo + 1
-                alto_bloque_matriz = 10
+                alto_bloque_matriz = 9
                 offset_centrado = max(0, (alto_disponible - alto_bloque_matriz) // 2)
                 fila_titulo_espesores = fila_ini_fondo + offset_centrado
 
-                ws.merge_cells(start_row=fila_titulo_espesores, start_column=col_matriz, end_row=fila_titulo_espesores, end_column=col_matriz + 3)
+                ws.merge_cells(start_row=fila_titulo_espesores, start_column=col_matriz, end_row=fila_titulo_espesores, end_column=18)
                 c_titulo = ws.cell(row=fila_titulo_espesores, column=col_matriz, value="ESPESORES DE PISO")
                 c_titulo.font = Font(bold=True)
                 c_titulo.alignment = align
-                for col in range(col_matriz, col_matriz + 4):
+                for col in range(col_matriz, 19):
                     ws.cell(row=fila_titulo_espesores, column=col).border = borde_titulo
                 ws.row_dimensions[fila_titulo_espesores].height = 20
 
                 fila_matriz = fila_titulo_espesores + 1
 
                 ws.cell(row=fila_matriz, column=col_matriz).border = borde
-                for j in range(7):
+                for j in range(8):
                     c = ws.cell(row=fila_matriz, column=col_matriz + 1 + j, value=j + 1)
                     c.font = Font(bold=True)
                     c.alignment = align
                     c.border = borde
 
-                for i in range(8):
+                for i in range(7):
                     fila = fila_matriz + 1 + i
                     c_label = ws.cell(row=fila, column=col_matriz, value=i + 1)
                     c_label.font = Font(bold=True)
                     c_label.alignment = align
                     c_label.border = borde
-                    for j in range(7):
+                    for j in range(8):
                         valor = matriz_espesores.iloc[i, j]
                         c = ws.cell(row=fila, column=col_matriz + 1 + j, value=valor)
                         c.alignment = align
@@ -498,8 +524,8 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                 ws.row_dimensions[fila_matriz].height = 18
 
                 if (matriz_espesores == "-").all().all():
-                    nota = ws.cell(row=fila_matriz + 9, column=col_matriz, value="NO SE REALIZÓ MEDICIÓN DE ESPESORES")
-                    ws.merge_cells(start_row=fila_matriz + 9, start_column=col_matriz, end_row=fila_matriz + 9, end_column=18)
+                    nota = ws.cell(row=fila_matriz + 8, column=col_matriz, value="NO SE REALIZÓ MEDICIÓN DE ESPESORES")
+                    ws.merge_cells(start_row=fila_matriz + 8, start_column=col_matriz, end_row=fila_matriz + 8, end_column=18)
                     nota.font = Font(bold=True, color="FF0000")
             except Exception:
                 matriz_espesores_omitida = True
@@ -832,7 +858,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             geo, id_shape, "FotoApp", rid_actual, foto["bytes_png"],
             foto["col_0idx"], foto["col_0idx"] + foto["col_span"],
             foto["fila_0idx"], foto["fila_0idx"] + foto["row_span"], margen=100000,
-            factor_h=FACTOR_FOTO_HORIZONTAL, factor_v=FACTOR_FOTO_VERTICAL
+            es_foto=True
         )
         siguiente_rid += 1
         id_shape += 1
@@ -1499,7 +1525,7 @@ def main(page: ft.Page):
     )
 
     # ==========================================================================
-    # SECCIÓN MEDICIÓN DE ESPESORES: MATRIZ 8x7 REAL (Punto 1..8 x Eje 1..7)
+    # SECCIÓN MEDICIÓN DE ESPESORES: MATRIZ REAL de 8 columnas (X1..X8) x 7 filas (Y1..Y7)
     # ==========================================================================
     chk_no_medicion = ft.Checkbox(
         label="⚠️ Marcar como 'NO SE REALIZÓ MEDICIÓN DE ESPESORES'",
@@ -1517,30 +1543,30 @@ def main(page: ft.Page):
     celdas_matriz = []
     filas_ui_matriz = []
 
-    # Encabezado de la tabla 8x7 (Esquina + Eje 1 a Eje 7)
-    header_cols = [ft.Container(content=ft.Text("Punto / Eje", weight="bold", size=12, color=ft.Colors.BLUE_200), width=90)]
-    for j in range(7):
+    # Encabezado de la tabla (esquina + X1 a X8)
+    header_cols = [ft.Container(content=ft.Text("Y \\ X", weight="bold", size=12, color=ft.Colors.BLUE_200), width=60)]
+    for j in range(8):
         header_cols.append(
             ft.Container(
-                content=ft.Text(f"Eje {j+1}", weight="bold", size=12, color=ft.Colors.BLUE_200),
-                width=85, alignment=ft.Alignment(0, 0)
+                content=ft.Text(f"X{j+1}", weight="bold", size=12, color=ft.Colors.BLUE_200),
+                width=75, alignment=ft.Alignment(0, 0)
             )
         )
     filas_ui_matriz.append(ft.Row(header_cols, spacing=6))
 
-    # 8 Filas (Punto 1 a Punto 8) x 7 Columnas
-    for i in range(8):
+    # 7 filas (Y1 a Y7) x 8 columnas (X1 a X8)
+    for i in range(7):
         fila_celdas = []
         controles_fila = [
             ft.Container(
-                content=ft.Text(f"Punto {i+1}", weight="bold", size=12, color=ft.Colors.GREY_300),
-                width=90, alignment=ft.Alignment(-1, 0)
+                content=ft.Text(f"Y{i+1}", weight="bold", size=12, color=ft.Colors.GREY_300),
+                width=60, alignment=ft.Alignment(-1, 0)
             )
         ]
-        for j in range(7):
+        for j in range(8):
             tf = ft.TextField(
                 value="20.00",
-                width=85,
+                width=75,
                 dense=True,
                 text_size=12,
                 text_align=ft.TextAlign.CENTER
@@ -1553,8 +1579,8 @@ def main(page: ft.Page):
     def al_cambiar_no_medicion(e):
         omitir = chk_no_medicion.value
         aviso_no_medicion.visible = omitir
-        for i in range(8):
-            for j in range(7):
+        for i in range(7):
+            for j in range(8):
                 celdas_matriz[i][j].disabled = omitir
                 celdas_matriz[i][j].value = "-" if omitir else "20.00"
         page.update()
@@ -1563,7 +1589,7 @@ def main(page: ft.Page):
 
     contenedor_matriz_8x7 = ft.Container(
         content=ft.Column([
-            ft.Text("📏 Mapeo / Medición de Espesores (Matriz 8x7)", size=22, weight="bold", color=ft.Colors.BLUE_200),
+            ft.Text("📏 Mapeo / Medición de Espesores (8 columnas X × 7 filas Y)", size=22, weight="bold", color=ft.Colors.BLUE_200),
             chk_no_medicion,
             aviso_no_medicion,
             ft.Text("Ingrese manualmente las lecturas de ultrasonido (mm) en la matriz:", size=12, color=ft.Colors.GREY_400),
@@ -1934,20 +1960,20 @@ def main(page: ft.Page):
             except Exception:
                 horometro_val = txt_horometro.value.strip()
 
-            # Construir el DataFrame 8x7 de espesores si el PM corresponde
+            # Construir el DataFrame de espesores (7 filas x 8 columnas) si el PM corresponde
             df_matriz_final = None
             if es_pm_espesores(pm_final):
                 if chk_no_medicion.value:
                     df_matriz_final = pd.DataFrame(
-                        [["-"] * 7 for _ in range(8)],
-                        index=[f"Punto {i+1}" for i in range(8)],
-                        columns=[f"Eje {j+1}" for j in range(7)]
+                        [["-"] * 8 for _ in range(7)],
+                        index=[f"Y{i+1}" for i in range(7)],
+                        columns=[f"X{j+1}" for j in range(8)]
                     )
                 else:
                     datos_m = []
-                    for i in range(8):
+                    for i in range(7):
                         fila_m = []
-                        for j in range(7):
+                        for j in range(8):
                             val_celda = celdas_matriz[i][j].value.strip()
                             try:
                                 fila_m.append(round(float(val_celda), 2))
@@ -1956,8 +1982,8 @@ def main(page: ft.Page):
                         datos_m.append(fila_m)
                     df_matriz_final = pd.DataFrame(
                         datos_m,
-                        index=[f"Punto {i+1}" for i in range(8)],
-                        columns=[f"Eje {j+1}" for j in range(7)]
+                        index=[f"Y{i+1}" for i in range(7)],
+                        columns=[f"X{j+1}" for j in range(8)]
                     )
 
             excel_bytes, avisos = await asyncio.to_thread(
