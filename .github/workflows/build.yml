@@ -3,10 +3,14 @@ name: Build Flet APK
 on:
   push:
     branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -15,14 +19,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Upgrade Pip and Setuptools
         run: |
-          python -m pip install --upgrade pip
-          pip install flet pandas openpyxl pillow
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install Project Dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install flet pandas openpyxl pillow; fi
+
+      - name: Install Latest Flet CLI
+        run: pip install --upgrade flet
 
       - name: Build APK with Flet
-        run: flet build apk
+        run: flet build apk --verbose
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
