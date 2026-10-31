@@ -12,7 +12,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build APK with Flet Action
-        uses: flet-dev/flet-build-action@v1
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          target: apk
+          python-version: "3.12"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Flet
+        run: pip install "flet[all]>=1.0"
+
+      - name: Build APK
+        run: flet build apk --verbose
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspeccion-tolvas-apk
+          path: build/apk
+          if-no-files-found: error
