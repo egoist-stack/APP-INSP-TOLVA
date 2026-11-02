@@ -186,6 +186,213 @@ ESTRUCTURA_ZONAS = [
     }
 ]
 
+ESTRUCTURA_ZONAS_DT = [
+    {
+        "titulo": "ZONA 01: CONJUNTO DE BLINDAJE DE TOLVA",
+        "esquema": ["CONJUNTO DE BLINDAJE DE TOLVA.png"],
+        "items": [
+            ("1.1", "PROTECTOR DE CANOPY", "VT"),
+            ("1.2", "PLACA ANTI-IMPACTO", "VT"),
+            ("1.3", "CORTA FLUJO RH", "VT"),
+            ("1.4", "CORTA FLUJO LH", "VT"),
+            ("1.5", "LINERS", "VT"),
+            ("1.6", "CONJUNTO ANTICARRY BACK.", "VT")
+        ]
+    },
+    {
+        "titulo": "ZONA 02: CONJUNTO LATERAL (RH / LH)",
+        "esquema": ["CONJUNTO LATERAL.png"],
+        "items": [
+            ("2.1", "REFUERZO PRINCIPAL CANOPY LH", "VT"),
+            ("2.2", "REFUERZO SECUNDARIO CANOPY LH", "VT"),
+            ("2.3", "BARRA PRINCIPAL LH", "VT"),
+            ("2.4", "BARRA SECUNDARIA LH", "VT"),
+            ("2.5", "REFUERZO PRINCIPAL PISO LH", "VT"),
+            ("2.6", "REFUERZO SECUNDARIO PISO LH", "VT"),
+            ("2.7", "LATERAL LH", "VT"),
+            ("2.8", "REFUERZO PRINCIPAL CANOPY RH", "VT"),
+            ("2.9", "REFUERZO SECUNDARIO CANOPY RH", "VT"),
+            ("2.10", "BARRA PRINCIPAL RH", "VT"),
+            ("2.11", "BARRA SECUNDARIA RH", "VT"),
+            ("2.12", "REFUERZO PRINCIPAL PISO RH", "VT"),
+            ("2.13", "REFUERZO SECUNDARIO PISO RH", "VT"),
+            ("2.14", "LATERAL RH", "VT")
+        ]
+    },
+    {
+        "titulo": "ZONA 03: CANOPY",
+        "esquema": ["CANOPY.png"],
+        "items": [
+            ("3.1", "VIGA LATERAL CANOPY TRASERA LH", "VT"),
+            ("3.2", "VIGA LATERAL CANOPY DELANTERA LH", "VT"),
+            ("3.3", "REFUERZO LATERAL VIGA CANOPY LH", "VT"),
+            ("3.4", "VIGA LATERAL CANOPY TRASERA RH", "VT"),
+            ("3.5", "VIGA LATERAL CANOPY DELANTERA RH", "VT"),
+            ("3.6", "REFUERZO LATERAL VIGA CANOPY RH", "VT"),
+            ("3.7", "PLANCHA CANOPY #1", "VT"),
+            ("3.8", "PLANCHA CANOPY #2", "VT"),
+            ("3.9", "TAPA FRONTAL CANOPY", "VT"),
+            ("3.10", "RETENEDOR DE ROCAS", "VT"),
+            ("3.11", "VIGA TRANSVERSAL CANOPY", "VT")
+        ]
+    },
+    {
+        "titulo": "ZONA 04 Y 05: PLANCHAS DE PISO / PLANCHAS FRONTALES",
+        "esquema": ["PLANCHAS DE PISO.png", "PLANCHAS FRONTALES.png"],
+        "items": [
+            ("4.1", "PLANCHA PISO PL1 IZQUIERDA", "VT/UT"),
+            ("4.2", "PLANCHA PISO PL1 DERECHA", "VT/UT"),
+            ("4.3", "PLANCHA PISO PL2 IZQUIERDA", "VT/UT"),
+            ("4.4", "PLANCHA PISO PL2 DERECHA", "VT/UT"),
+            ("4.5", "PLANCHA PISO PL3 IZQUIERDA", "VT/UT"),
+            ("4.6", "PLANCHA PISO PL3 DERECHA", "VT/UT"),
+            ("4.7", "PLANCHA PISO PL4 IZQUIERDA", "VT/UT"),
+            ("4.8", "PLANCHA PISO PL4 DERECHA", "VT/UT"),
+            ("5.1", "PLANCHA FRONTAL PL1 DERECHA", "VT/UT"),
+            ("5.2", "PLANCHA FRONTAL PL1 IZQUIERDA", "VT"),
+            ("5.3", "PLANCHA FRONTAL PL2 DERECHA", "VT"),
+            ("5.4", "PLANCHA FRONTAL PL2 IZQUIERDA", "VT"),
+            ("5.5", "PLANCHA FRONTAL PL3 DERECHA", "VT"),
+            ("5.6", "PLANCHA FRONTAL PL3 IZQUIERDA", "VT")
+        ]
+    },
+    {
+        "titulo": "ZONA 06 Y 07: LONGUERINA DELANTERA Y TRASERA",
+        "esquema": ["LONGUERINA DELANTERA.png", "LONGUERINA  TRASERA.png"],
+        "items": [
+            ("6.1", "LONGUERINA DELANTERA DERECHA", "VT"),
+            ("6.2", "LONGUERINA DELANTERA IZQUIERDA", "VT"),
+            ("6.3", "CENTRADOR DERECHO", "VT"),
+            ("6.4", "CENTRADOR IZQUIERDO", "VT"),
+            ("7.1", "LONGUERINA TRASERA DERECHA", "VT"),
+            ("7.2", "LONGUERINA TRASERA IZQUIERDA", "VT")
+        ]
+    },
+    {
+        "titulo": "ZONA 08 Y 09: DEFLECTORES Y CAJAS PIVOTES",
+        "esquema": ["DEFLECTORES.png", "CAJAS PIVOTES.png"],
+        "items": [
+            ("8.1", "CUBRE ESPEJO DERECHO", "VT"),
+            ("8.2", "CUBRE ESCAPE DERECHO", "VT"),
+            ("8.3", "PROTECTOR NEUMATICO DERECHO", "VT"),
+            ("8.4", "CUBRE ESPEJO IZQUIERDO", "VT"),
+            ("8.5", "CUBRE ESCAPE IZQUIERDO", "VT"),
+            ("8.6", "PROTECTOR NEUMATICO IZQUIERDO", "VT"),
+            ("9.1", "SOPORTE EXTERIOR DERECHO #1", "VT"),
+            ("9.2", "SOPORTE EXTERIOR DERECHO #2", "VT"),
+            ("9.3", "SOPORTE INTERIOR DERECHO #1", "VT"),
+            ("9.4", "SOPORTE INTERIOR DERECHO #2", "VT"),
+            ("9.5", "SOPORTE EXTERIOR IZQUIERDO #1", "VT"),
+            ("9.6", "SOPORTE EXTERIOR IZQUIERDO #2", "VT"),
+            ("9.7", "SOPORTE INTERIOR IZQUIERDO #1", "VT"),
+            ("9.8", "SOPORTE INTERIOR IZQUIERDO #2", "VT"),
+            ("9.9", "BUSHING LH EXTERIOR", "VT"),
+            ("9.10", "BUSHING LH INTERIOR", "VT"),
+            ("9.11", "BUSHING RH EXTERIOR", "VT"),
+            ("9.12", "BUSHING RH INTERIOR", "VT"),
+            ("9.13", "CARTELA CENTRAL DE CAJA PIVOTE", "VT")
+        ]
+    },
+    {
+        "titulo": "ZONA 10: VIGA DE PISO IZQUIERDO / DERECHO",
+        "esquema": ["VIGA DE PISO IZQUIERDO Y DERECHO.png"],
+        "items": [
+            ("10.1", "VIGA DE PISO # 01 RH", "VT"),
+            ("10.2", "VIGA DE PISO # 02 RH", "VT"),
+            ("10.3", "VIGA DE PISO # 03 RH", "VT"),
+            ("10.4", "VIGA DE PISO # 04 RH", "VT"),
+            ("10.5", "VIGA DE PISO # 05 RH", "VT"),
+            ("10.6", "VIGA DE PISO # 06 RH", "VT"),
+            ("10.7", "VIGA DE PISO # 01 LH", "VT"),
+            ("10.8", "VIGA DE PISO # 02 LH", "VT"),
+            ("10.9", "VIGA DE PISO # 03 LH", "VT"),
+            ("10.10", "VIGA DE PISO # 04 LH", "VT"),
+            ("10.11", "VIGA DE PISO # 05 LH", "VT"),
+            ("10.12", "VIGA DE PISO # 06 LH", "VT")
+        ]
+    },
+]
+
+
+# ------------------------------------------------------------------------------
+# PERFILES DE EQUIPO: cada modelo trae su plantilla, sus imágenes y su estructura.
+# Para agregar un equipo nuevo: crear su perfil aquí y registrarlo en PERFILES.
+# ------------------------------------------------------------------------------
+LEYENDA_TECNICA = "Leyenda Técnica: NR: No Reparado | R: Reparado | VT: Inspección Visual | LP: Líquidos Penetrantes | UT: Ultrasonido"
+
+PERFIL_TOLVA_CAT = {
+    "id": "CAT",
+    "nombre": "Tolva CAT 794 AC",
+    "titulo_app": "Sistema de Inspección de Tolvas CAT 794 AC",
+    "titulo_form": "📋 Reporte de Inspección de Tolvas CAT 794 AC",
+    "plantilla": "plantilla_tolva.xlsx",
+    "carpeta_esquemas": "imagenes_esquemas",
+    "esquema_general": ("esquema_tolva.png", "esquema_tolva.jpg"),
+    "hoja": "TOLVA DT",
+    "estructura": ESTRUCTURA_ZONAS,
+    # celdas del encabezado de la plantilla
+    "celdas": {"cliente": "C5", "lugar": "C6", "fecha": "C7", "equipo": "H6", "tolva": "H7",
+               "horometro": "L6", "informe": "P5", "revision": "P6", "pm": "P7"},
+    # matriz de espesores: remerge=True -> la plantilla trae un área combinada A..R que se parte en A..J
+    "matriz": {"remerge": True},
+    # filas del cierre de la plantilla (OTs, nombre, firma, fecha)
+    "cierre": {"fila_ot": 148, "fila_ot_max": 155, "fila_nombre": 157, "fila_firma": 160,
+               "firma_filas": 2, "fila_fecha": 162, "fila_final": 162},
+    "prefijo_informe": "ZA-IF",
+    "db_prefijo": "",
+    "idx_letrero_lateral": 1,
+    "idx_letrero_posterior": 5,
+    "defectos": ["LF", "D", "DE", "DP", "F", "FA"],
+    "leyenda_defectos": "Leyenda Defectos: D: Desprendimiento | DE: Desgaste | DP: Desprendimiento Parcial | F: Fisurado | LF: Libre de fisura (Aceptable)",
+    "hoja2_desde_openpyxl": False,
+    "limpiar_fuera_de_area": False,
+    "factor_pagina": 1.0,
+    "desplazar_alturas": False,
+}
+
+PERFIL_TOLVA_DT = {
+    "id": "DT",
+    "nombre": "Tolva DT",
+    "titulo_app": "Sistema de Inspección de Tolvas DT",
+    "titulo_form": "📋 Reporte de Inspección de Tolvas DT",
+    "plantilla": "plantilla_tolva_DT.xlsx",
+    "carpeta_esquemas": "imagenes_esquemas_DT",
+    "esquema_general": (),
+    "hoja": "TOLVA DT",
+    "estructura": ESTRUCTURA_ZONAS_DT,
+    "celdas": {"cliente": "C5", "lugar": "C6", "fecha": "C7", "tolva": "H6", "equipo": "L6",
+               "horometro": "L7", "informe": "P5", "revision": "P6", "pm": "P7"},
+    "matriz": {"remerge": False, "fila_ini": 9, "fila_fin": 27},
+    "cierre": {"fila_ot": 198, "fila_ot_max": 205, "fila_nombre": 207, "fila_firma": 208,
+               "firma_filas": 3, "fila_fecha": 211, "fila_final": 211},
+    "prefijo_informe": "ZMN-IF",
+    "db_prefijo": "DT:",
+    "idx_letrero_lateral": 1,
+    "idx_letrero_posterior": 5,
+    "defectos": ["LF", "D", "DE", "DP", "F", "FN"],
+    "leyenda_defectos": "Leyenda Defectos: D: Desprendimiento | DE: Desgaste | DP: Desprendimiento Parcial | F: Fisurado | FN: Fisura nueva | LF: Libre de fisura (Aceptable)",
+    "hoja2_desde_openpyxl": True,
+    "limpiar_fuera_de_area": True,
+    "factor_pagina": 0.94,
+    "desplazar_alturas": True,
+}
+
+# Equipos que la empresa maneja, agrupados por tipo. Solo los que tienen perfil se pueden usar.
+CATALOGO_EQUIPOS = {
+    "TOLVAS": ["CAT", "DT"],
+    "PALAS": ["7495A", "7495B", "6060"],
+    "EXCAVADORAS": ["6015"],
+    "TRACTOR ORUGA": ["D10T2", "D11T"],
+    "TRACTOR DE RUEDAS": ["834K", "824K"],
+    "MOTONIVELADORA": ["24M", "16M"],
+    "MANIPULADOR DE CABLES": ["988K"],
+    "CARGADOR": ["992", "2350"],
+}
+PERFILES = {
+    ("TOLVAS", "CAT"): PERFIL_TOLVA_CAT,
+    ("TOLVAS", "DT"): PERFIL_TOLVA_DT,
+}
+
 def es_pm_espesores(pm_str):
     if not pm_str:
         return False
@@ -199,11 +406,24 @@ def es_pm_espesores(pm_str):
 # ==============================================================================
 # 2. MOTOR DE PROCESAMIENTO DE EXCEL Y XML (100% FIEL AL ORIGINAL)
 # ==============================================================================
+_OPCIONES_INSERCION = {"desplazar_alturas": False}
+
 def _insertar_filas_seguro(ws, fila_insercion, cantidad):
     merges_originales = list(ws.merged_cells.ranges)
     for mc in merges_originales:
         ws.unmerge_cells(str(mc))
+    alturas_previas = {}
+    max_fila_previa = ws.max_row
+    if _OPCIONES_INSERCION["desplazar_alturas"]:
+        for r in range(fila_insercion, max_fila_previa + 1):
+            dim = ws.row_dimensions.get(r)
+            alturas_previas[r] = dim.height if dim is not None else None
     ws.insert_rows(fila_insercion, amount=cantidad)
+    if _OPCIONES_INSERCION["desplazar_alturas"]:
+        # openpyxl no mueve las alturas de fila al insertar: las movemos nosotros
+        for fila_nueva in range(fila_insercion, max_fila_previa + cantidad + 1):
+            fila_vieja = fila_nueva - cantidad
+            ws.row_dimensions[fila_nueva].height = alturas_previas.get(fila_vieja) if fila_vieja >= fila_insercion else None
     for mc in merges_originales:
         min_row, min_col, max_row, max_col = mc.min_row, mc.min_col, mc.max_row, mc.max_col
         if min_row >= fila_insercion:
@@ -213,10 +433,36 @@ def _insertar_filas_seguro(ws, fila_insercion, cantidad):
             max_row += cantidad
         ws.merge_cells(start_row=min_row, start_column=min_col, end_row=max_row, end_column=max_col)
 
+def _sin_tildes(valor):
+    import unicodedata
+    if valor is None:
+        return ""
+    t = unicodedata.normalize("NFD", str(valor))
+    return "".join(ch for ch in t if unicodedata.category(ch) != "Mn").strip().upper()
+
+def _quitar_anchors_fuera_de_area(xml_texto, col_min_0idx=18):
+    """Quita imágenes/figuras sueltas que la plantilla guarda a la derecha del área de impresión."""
+    def procesar(m):
+        bloque = m.group(0)
+        m_from = re.search(r'<xdr:from><xdr:col>(\d+)</xdr:col>', bloque)
+        if m_from and int(m_from.group(1)) >= col_min_0idx:
+            return ""
+        return bloque
+    return re.sub(r'<xdr:(twoCellAnchor|oneCellAnchor|absoluteAnchor)\b.*?</xdr:\1>', procesar, xml_texto, flags=re.DOTALL)
+
+def _podar_rels_sin_uso(xml_dibujo, rels_texto):
+    def revisar(m):
+        rel = m.group(0)
+        m_id = re.search(r'Id="(rId\d+)"', rel)
+        if m_id and 'relationships/image' in rel and f'"{m_id.group(1)}"' not in xml_dibujo:
+            return ""
+        return rel
+    return re.sub(r'<Relationship\s[^>]*/>', revisar, rels_texto)
+
 def _detectar_headers_zonas(ws):
     filas = []
     for row in range(1, ws.max_row + 1):
-        if ws.cell(row=row, column=1).value == "ZONA" and ws.cell(row=row, column=2).value == "DESCRIPCION":
+        if _sin_tildes(ws.cell(row=row, column=1).value) == "ZONA" and _sin_tildes(ws.cell(row=row, column=2).value) == "DESCRIPCION":
             filas.append(row)
     return filas
 
@@ -437,40 +683,52 @@ def obtener_img_state(llave):
 def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo,
                            cod_tolva, horometro, cod_informe, revision, pm,
                            estructura_zonas, nombre_realizado, fecha_firma, firma_ruta,
-                           todos_los_rechazos, matriz_espesores=None):
+                           todos_los_rechazos, matriz_espesores=None, perfil=None):
+    perfil = perfil or PERFIL_TOLVA_CAT
+    cel = perfil["celdas"]
+    cierre = perfil["cierre"]
+    _OPCIONES_INSERCION["desplazar_alturas"] = bool(perfil.get("desplazar_alturas"))
     wb = openpyxl.load_workbook(ruta_plantilla)
-    ws = wb["TOLVA DT"]
+    ws = wb[perfil["hoja"]]
     
     font_black = Font(color="000000")
     font_red = Font(color="FF0000", bold=True)
 
-    ws["C5"] = cliente
-    ws["C6"] = lugar
-    ws["C7"] = fecha_insp
-    ws["H6"] = cod_equipo
-    ws["H7"] = cod_tolva
-    ws["L6"] = horometro
-    ws["P5"] = cod_informe
-    ws["P6"] = revision
-    ws["P7"] = pm
+    ws[cel["cliente"]] = cliente
+    ws[cel["lugar"]] = lugar
+    ws[cel["fecha"]] = fecha_insp
+    ws[cel["equipo"]] = cod_equipo
+    ws[cel["tolva"]] = cod_tolva
+    ws[cel["horometro"]] = horometro
+    ws[cel["informe"]] = cod_informe
+    ws[cel["revision"]] = revision
+    ws[cel["pm"]] = pm
 
     # --- MEDICIÓN DE ESPESORES (MATRIZ 7x7 EN COLUMNAS K a R JUNTO A ZONA 1) ---
     matriz_espesores_omitida = False
     if es_pm_espesores(pm) and matriz_espesores is not None:
         merge_fondo_diagrama = None
-        for mc in ws.merged_cells.ranges:
-            if mc.min_col == 1 and mc.max_col >= 18 and 8 <= mc.min_row <= 10 and (mc.max_row - mc.min_row) >= 10:
-                merge_fondo_diagrama = mc
-                break
+        cfg_matriz = perfil["matriz"]
+        if cfg_matriz.get("remerge", True):
+            for mc in ws.merged_cells.ranges:
+                if mc.min_col == 1 and mc.max_col >= 18 and 8 <= mc.min_row <= 10 and (mc.max_row - mc.min_row) >= 10:
+                    merge_fondo_diagrama = mc
+                    break
+        else:
+            merge_fondo_diagrama = True  # la plantilla ya deja libre el espacio a la derecha del esquema
 
         if merge_fondo_diagrama is None:
             matriz_espesores_omitida = True
         else:
             try:
-                fila_ini_fondo = merge_fondo_diagrama.min_row
-                fila_fin_fondo = merge_fondo_diagrama.max_row
-                ws.unmerge_cells(str(merge_fondo_diagrama))
-                ws.merge_cells(start_row=fila_ini_fondo, start_column=1, end_row=fila_fin_fondo, end_column=10)
+                if cfg_matriz.get("remerge", True):
+                    fila_ini_fondo = merge_fondo_diagrama.min_row
+                    fila_fin_fondo = merge_fondo_diagrama.max_row
+                    ws.unmerge_cells(str(merge_fondo_diagrama))
+                    ws.merge_cells(start_row=fila_ini_fondo, start_column=1, end_row=fila_fin_fondo, end_column=10)
+                else:
+                    fila_ini_fondo = cfg_matriz["fila_ini"]
+                    fila_fin_fondo = cfg_matriz["fila_fin"]
 
                 col_matriz = 11  # K (rótulos de fila); los 7 valores van en L..R
                 borde = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
@@ -482,11 +740,11 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                 offset_centrado = max(0, (alto_disponible - alto_bloque_matriz) // 2)
                 fila_titulo_espesores = fila_ini_fondo + offset_centrado
 
-                ws.merge_cells(start_row=fila_titulo_espesores, start_column=col_matriz, end_row=fila_titulo_espesores, end_column=col_matriz + 3)
+                ws.merge_cells(start_row=fila_titulo_espesores, start_column=col_matriz, end_row=fila_titulo_espesores, end_column=18)
                 c_titulo = ws.cell(row=fila_titulo_espesores, column=col_matriz, value="ESPESORES DE PISO")
                 c_titulo.font = Font(bold=True)
                 c_titulo.alignment = align
-                for col in range(col_matriz, col_matriz + 4):
+                for col in range(col_matriz, 19):
                     ws.cell(row=fila_titulo_espesores, column=col).border = borde_titulo
                 ws.row_dimensions[fila_titulo_espesores].height = 20
 
@@ -528,7 +786,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     filas_headers_zonas = _detectar_headers_zonas(ws)
     ws.row_breaks.brk = []
 
-    presupuesto_pagina_pt = _calcular_presupuesto_pagina_pt(ws)
+    presupuesto_pagina_pt = _calcular_presupuesto_pagina_pt(ws) * perfil.get("factor_pagina", 1.0)
     altura_pagina_actual_pt = _altura_filas_pt(ws, 1, filas_headers_zonas[0] - 1)
     fila_medida_hasta = filas_headers_zonas[0] - 1
     fila_legend_zona_anterior = None
@@ -607,12 +865,12 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
 
         # Letreros OBLIGATORIOS de Zona 02 y Zona 08 (Siempre se generan)
         bloques_obligatorios = []
-        if idx_z == 1:
+        if idx_z == perfil["idx_letrero_lateral"]:
             bloques_obligatorios = [
                 {"descripcion": "LETRERO LATERAL RH", "llave": "esp_z2_rh"},
                 {"descripcion": "LETRERO LATERAL LH", "llave": "esp_z2_lh"},
             ]
-        elif idx_z == 5:
+        elif idx_z == perfil["idx_letrero_posterior"]:
             bloques_obligatorios = [
                 {"descripcion": "LETRERO POSTERIOR", "llave": "esp_z8_post"},
             ]
@@ -696,9 +954,9 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             fila_legend_zona_anterior = siguiente_fila_libre - 1
 
     # --- ZONAS A REPARAR (OTs) ---
-    fila_ot = 148 + desplazamiento
+    fila_ot = cierre["fila_ot"] + desplazamiento
     ws.row_breaks.append(Break(id=fila_ot - 2))
-    fila_ot_max = 155 + desplazamiento
+    fila_ot_max = cierre["fila_ot_max"] + desplazamiento
     for idx_ot, rechazo in enumerate(todos_los_rechazos):
         if fila_ot > fila_ot_max:
             break
@@ -714,9 +972,9 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             pass
         fila_ot += 1
 
-    fila_nombre = 157 + desplazamiento
-    fila_firma = 160 + desplazamiento
-    fila_fecha = 162 + desplazamiento
+    fila_nombre = cierre["fila_nombre"] + desplazamiento
+    fila_firma = cierre["fila_firma"] + desplazamiento
+    fila_fecha = cierre["fila_fecha"] + desplazamiento
     try:
         ws.cell(row=fila_nombre, column=2, value=nombre_realizado)
     except Exception:
@@ -734,7 +992,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             "fila_0idx": fila_firma - 1,
             "col_0idx": 1,
             "col_span": 3,
-            "row_span": 2,
+            "row_span": cierre["firma_filas"],
             "bytes_png": buf_firma.getvalue(),
         })
 
@@ -743,7 +1001,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         ws.sheet_properties.pageSetUpPr = PageSetupProperties()
     ws.sheet_properties.pageSetUpPr.fitToPage = False
 
-    fila_final_original = 162
+    fila_final_original = cierre["fila_final"]
     fila_final_nueva = fila_final_original + desplazamiento
     ws.print_area = f"A1:R{fila_final_nueva}"
 
@@ -772,8 +1030,24 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                     xml_data = xml_data.replace('</worksheet>', tag_drawing + '</worksheet>')
             partes_nuevas[nombre] = xml_data.encode('utf-8')
 
+    if perfil.get("hoja2_desde_openpyxl") and 'xl/worksheets/sheet2.xml' in z_temp.namelist():
+        s2_orig = z_original.read('xl/worksheets/sheet2.xml').decode('utf-8')
+        s2_new = z_temp.read('xl/worksheets/sheet2.xml').decode('utf-8')
+        s2_new = re.sub(r'<[a-zA-Z0-9]*:?drawing r:id=".*?"\s*/>', '', s2_new)
+        s2_new = re.sub(r'<[a-zA-Z0-9]*:?legacyDrawing r:id=".*?"\s*/>', '', s2_new)
+        m_dr2 = re.search(r'<[a-zA-Z0-9]*:?drawing r:id=".*?"\s*/>', s2_orig)
+        if m_dr2:
+            tag2 = m_dr2.group(0)
+            if 'xmlns:r=' not in tag2:
+                tag2 = tag2.replace('r:id=', 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id=')
+            s2_new = s2_new.replace('</worksheet>', tag2 + '</worksheet>')
+        partes_nuevas['xl/worksheets/sheet2.xml'] = s2_new.encode('utf-8')
+
     drawing1_xml = z_original.read('xl/drawings/drawing1.xml').decode('utf-8')
     drawing1_rels = z_original.read('xl/drawings/_rels/drawing1.xml.rels').decode('utf-8')
+
+    if perfil.get("limpiar_fuera_de_area"):
+        drawing1_xml = _quitar_anchors_fuera_de_area(drawing1_xml, 18)
 
     for texto_zona in ("ZONA 06", "ZONA 07", "ZONA 08"):
         drawing1_xml = _ajustar_altura_forma_por_texto(drawing1_xml, texto_zona, 393247)
@@ -802,7 +1076,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         n_imgs = len(nombres_png)
         ancho_total_cols = 18
         for idx_img, nombre_png in enumerate(nombres_png):
-            ruta_png = buscar_recurso("imagenes_esquemas", nombre_png) or os.path.join("imagenes_esquemas", nombre_png)
+            ruta_png = buscar_recurso(perfil["carpeta_esquemas"], nombre_png) or os.path.join(perfil["carpeta_esquemas"], nombre_png)
             if not os.path.exists(ruta_png):
                 continue
             col_ini = int(idx_img * ancho_total_cols / n_imgs)
@@ -860,13 +1134,35 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         drawing1_xml
     )
     
+    if perfil.get("limpiar_fuera_de_area"):
+        drawing1_rels = _podar_rels_sin_uso(drawing1_xml, drawing1_rels)
     partes_nuevas['xl/drawings/drawing1.xml'] = drawing1_xml.encode('utf-8')
     partes_nuevas['xl/drawings/_rels/drawing1.xml.rels'] = drawing1_rels.encode('utf-8')
+
+    medios_en_uso = None
+    if perfil.get("limpiar_fuera_de_area"):
+        medios_en_uso = set()
+        for item in z_original.infolist():
+            if item.filename.endswith('.rels'):
+                txt_rels = partes_nuevas.get(item.filename)
+                txt_rels = txt_rels.decode('utf-8') if txt_rels else z_original.read(item.filename).decode('utf-8', 'ignore')
+                for destino in re.findall(r'Target="[^"]*media/([^"]+)"', txt_rels):
+                    medios_en_uso.add(destino)
+
+    # calcChain.xml no se copia: se quita también su referencia para que Excel no pida reparar el archivo
+    for nombre_ref in ('xl/_rels/workbook.xml.rels', '[Content_Types].xml'):
+        if nombre_ref in z_original.namelist():
+            txt_ref = z_original.read(nombre_ref).decode('utf-8')
+            txt_ref = re.sub(r'<Relationship\s[^>]*calcChain[^>]*/>', '', txt_ref)
+            txt_ref = re.sub(r'<Override\s[^>]*calcChain[^>]*/>', '', txt_ref)
+            partes_nuevas[nombre_ref] = txt_ref.encode('utf-8')
 
     buf_final = io.BytesIO()
     with zipfile.ZipFile(buf_final, 'w', zipfile.ZIP_DEFLATED) as z_final:
         for item in z_original.infolist():
             if item.filename == 'xl/calcChain.xml':
+                continue
+            if medios_en_uso is not None and item.filename.startswith('xl/media/') and item.filename.split('/')[-1] not in medios_en_uso:
                 continue
             datos = partes_nuevas.get(item.filename, z_original.read(item.filename))
             z_final.writestr(item, datos)
@@ -885,8 +1181,16 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
 # ==============================================================================
 # 3. INTERFAZ GRÁFICA EN FLET 1.0+ (100% FIEL A STREAMLIT)
 # ==============================================================================
-def main(page: ft.Page):
-    page.title = "Sistema de Inspección de Tolvas CAT 794 AC"
+def construir_formulario(page: ft.Page, perfil, volver=None):
+    ESTRUCTURA_ZONAS = perfil["estructura"]
+    estado_app.clear()
+    rutas_fotos.clear()
+    for lista in (page.services, page.overlay):
+        try:
+            lista.clear()
+        except Exception:
+            pass
+    page.title = perfil["titulo_app"]
     page.scroll = "adaptive"
     page.padding = 12
     page.theme_mode = ft.ThemeMode.DARK
@@ -1412,11 +1716,13 @@ def main(page: ft.Page):
         ], spacing=4)
 
     # --- TÍTULO E INFO ---
+    if volver is not None:
+        page.add(ft.TextButton("← Cambiar de equipo", on_click=lambda e: volver()))
     page.add(
-        ft.Text("📋 Reporte de Inspección de Tolvas CAT 794 AC", size=22, weight="bold", color=ft.Colors.BLUE_200),
+        ft.Text(perfil["titulo_form"], size=22, weight="bold", color=ft.Colors.BLUE_200),
         ft.Container(
             content=ft.Text(
-                "💡 IMPORTANTE: Asegúrate de que tu archivo plantilla_tolva.xlsx esté completamente vacío de fotos. "
+                f"💡 IMPORTANTE: Asegúrate de que tu archivo {perfil['plantilla']} esté completamente vacío de fotos. "
                 "Si la plantilla tiene fotos de ejemplo, bórralas, de lo contrario se mezclarán con las que selecciones aquí.",
                 color=ft.Colors.WHITE, size=13
             ),
@@ -1463,14 +1769,14 @@ def main(page: ft.Page):
         options=[ft.dropdown.Option(eq) for eq in lista_equipos],
         value="HT002", dense=True
     )
-    tolva_ini = db_tolvas.get("HT002", "T-CA2")
+    tolva_ini = db_tolvas.get(perfil["db_prefijo"] + "HT002", "T-CA2" if perfil["id"] == "CAT" else "")
     txt_tolva = ft.TextField(label="Código de Tolva:", value=tolva_ini, dense=True)
 
     def guardar_tolva_db(e=None):
         eq = dd_equipo.value
         val = txt_tolva.value.strip()
-        if val and val != db_tolvas.get(eq):
-            db_tolvas[eq] = val
+        if val and val != db_tolvas.get(perfil["db_prefijo"] + eq):
+            db_tolvas[perfil["db_prefijo"] + eq] = val
             guardar_db(db_tolvas)
 
     txt_tolva.on_change = guardar_tolva_db
@@ -1478,14 +1784,14 @@ def main(page: ft.Page):
 
     # Columna 3: Sufijo, Código Informe, Revisión, PM (con opción manual y múltiplos de 1000)
     txt_sufijo = ft.TextField(label="Sufijo del Informe (XXX):", value="023", dense=True)
-    lbl_cod_informe = ft.Text(f"Código Generado: ZA-IF-HT002-023", weight="bold", color=ft.Colors.BLUE_300, size=13)
+    lbl_cod_informe = ft.Text(f"Código Generado: {perfil['prefijo_informe']}-HT002-023", weight="bold", color=ft.Colors.BLUE_300, size=13)
 
     def actualizar_codigo_informe(e=None):
         eq = dd_equipo.value
         suf = txt_sufijo.value.strip()
-        lbl_cod_informe.value = f"Código Generado: ZA-IF-{eq}-{suf}"
+        lbl_cod_informe.value = f"Código Generado: {perfil['prefijo_informe']}-{eq}-{suf}"
         if e and e.control == dd_equipo:
-            txt_tolva.value = db_tolvas.get(eq, "T-CA2" if eq == "HT002" else "")
+            txt_tolva.value = db_tolvas.get(perfil["db_prefijo"] + eq, "T-CA2" if (eq == "HT002" and perfil["id"] == "CAT") else "")
         page.update()
 
     dd_equipo.on_select = actualizar_codigo_informe
@@ -1608,7 +1914,7 @@ def main(page: ft.Page):
     txt_pm_manual.on_change = evaluar_visibilidad_matriz
 
     # --- ESQUEMA VISUAL GENERAL ---
-    for ext in ("esquema_tolva.png", "esquema_tolva.jpg"):
+    for ext in perfil["esquema_general"]:
         ruta_ext = buscar_recurso(ext)
         if ruta_ext:
             with open(ruta_ext, "rb") as f_ext:
@@ -1616,7 +1922,7 @@ def main(page: ft.Page):
             page.add(
                 ft.Text("🗺️ Esquema Guía General de Zonas", size=18, weight="bold", color=ft.Colors.WHITE),
                 ft.Image(src=bytes_ext, height=280, fit="contain", border_radius=8),
-                ft.Text("Plano de Ubicación General de Componentes - Tolva CAT 794 AC", size=11, color=ft.Colors.GREY_400),
+                ft.Text(f"Plano de Ubicación General de Componentes - {perfil['nombre']}", size=11, color=ft.Colors.GREY_400),
                 ft.Divider(height=20, color=ft.Colors.BLUE_GREY_800)
             )
             break
@@ -1672,7 +1978,7 @@ def main(page: ft.Page):
         
         imagenes_row = ft.Row(spacing=20, wrap=True)
         for img_name in zona["esquema"]:
-            ruta_local = buscar_recurso("imagenes_esquemas", img_name)
+            ruta_local = buscar_recurso(perfil["carpeta_esquemas"], img_name)
             if ruta_local:
                 with open(ruta_local, "rb") as f_loc:
                     bytes_loc = f_loc.read()
@@ -1681,7 +1987,7 @@ def main(page: ft.Page):
                 )
             else:
                 imagenes_row.controls.append(
-                    ft.Text(f"⚠️ No se encontró el esquema '{img_name}' (carpeta imagenes_esquemas)", size=12, color=ft.Colors.AMBER_400)
+                    ft.Text(f"⚠️ No se encontró el esquema '{img_name}' (carpeta {perfil['carpeta_esquemas']})", size=12, color=ft.Colors.AMBER_400)
                 )
         if imagenes_row.controls:
             page.add(
@@ -1779,7 +2085,7 @@ def main(page: ft.Page):
                 return al_cambiar_def
 
             dd_def = ft.Dropdown(
-                options=[ft.dropdown.Option(x) for x in ["LF", "D", "DE", "DP", "F", "FA"]],
+                options=[ft.dropdown.Option(x) for x in perfil["defectos"]],
                 value="LF", width=130, dense=True, text_size=13, label="Defecto",
                 on_select=crear_evento_defecto(lbl_cond, dd_opclong, txt_long, dd_est, dd_com, contenedor_fotos_rechazo)
             )
@@ -1809,7 +2115,7 @@ def main(page: ft.Page):
             page.add(ft.Divider(height=4, color=ft.Colors.TRANSPARENT))
             
         # --- BLOQUES DE LETREROS OBLIGATORIOS (SOLO FOTO PANORÁMICA, FIEL AL ORIGINAL) ---
-        if idx_z == 1:
+        if idx_z == perfil["idx_letrero_lateral"]:
             lbl_pano_rh = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
             lbl_pano_lh = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
             controles["img_pano_esp_z2_rh"] = lbl_pano_rh
@@ -1827,7 +2133,7 @@ def main(page: ft.Page):
                     padding=15, bgcolor=ft.Colors.BLUE_GREY_900, border_radius=8
                 )
             )
-        elif idx_z == 5:
+        elif idx_z == perfil["idx_letrero_posterior"]:
             lbl_pano_post = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
             controles["img_pano_esp_z8_post"] = lbl_pano_post
 
@@ -1848,8 +2154,8 @@ def main(page: ft.Page):
             )
 
         page.add(
-            ft.Text("Leyenda Defectos: D: Desprendimiento | DE: Desgaste | DP: Desprendimiento Parcial | F: Fisurado | LF: Libre de fisura (Aceptable)", size=11, color=ft.Colors.GREY_500),
-            ft.Text("Leyenda Técnica: NR: No Reparado | R: Reparado | VT: Inspección Visual | LP: Líquidos Penetrantes | UT: Ultrasonido", size=11, color=ft.Colors.GREY_500),
+            ft.Text(perfil["leyenda_defectos"], size=11, color=ft.Colors.GREY_500),
+            ft.Text(LEYENDA_TECNICA, size=11, color=ft.Colors.GREY_500),
             ft.Divider(height=35, color=ft.Colors.BLUE_GREY_800)
         )
 
@@ -1901,10 +2207,10 @@ def main(page: ft.Page):
     texto_estado = ft.Text("", size=16, weight="bold")
     
     async def procesar_todo(e):
-        ruta_plantilla = buscar_recurso("plantilla_tolva.xlsx")
+        ruta_plantilla = buscar_recurso(perfil["plantilla"])
         if not ruta_plantilla:
             texto_estado.value = (
-                "❌ No se encontró 'plantilla_tolva.xlsx' dentro de la app.\n"
+                f"❌ No se encontró '{perfil['plantilla']}' dentro de la app.\n"
                 "Archivos que veo:\n" + diagnostico_archivos()
             )
             texto_estado.color = ft.Colors.RED_400
@@ -1944,7 +2250,7 @@ def main(page: ft.Page):
             lugar_final = txt_lugar_manual.value if dd_lugar.value == "[Entrada Manual]" else dd_lugar.value
             pm_final = obtener_pm_efectivo()
             nombre_firma_final = txt_nombre_firma_manual.value if dd_nombre_firma.value == "[Entrada Manual]" else dd_nombre_firma.value
-            cod_inf_final = f"ZA-IF-{dd_equipo.value}-{txt_sufijo.value.strip()}"
+            cod_inf_final = f"{perfil['prefijo_informe']}-{dd_equipo.value}-{txt_sufijo.value.strip()}"
 
             try:
                 horometro_val = float(txt_horometro.value.strip())
@@ -1994,7 +2300,8 @@ def main(page: ft.Page):
                 fecha_firma=txt_fecha_firma.value.strip(),
                 firma_ruta=rutas_fotos.get("firma_upload"),
                 todos_los_rechazos=todos_los_rechazos,
-                matriz_espesores=df_matriz_final
+                matriz_espesores=df_matriz_final,
+                perfil=perfil
                 )
             )
             
@@ -2041,5 +2348,68 @@ def main(page: ft.Page):
             margin=ft.Margin(left=0, top=15, right=0, bottom=50)
         )
     )
+
+
+def mostrar_selector(page: ft.Page):
+    """Primera pantalla: elegir tipo de equipo y modelo."""
+    for lista in (page.services, page.overlay):
+        try:
+            lista.clear()
+        except Exception:
+            pass
+    page.controls.clear()
+    page.title = "Sistema de Inspección de Equipos"
+    page.scroll = "adaptive"
+    page.padding = 12
+    page.theme_mode = ft.ThemeMode.DARK
+    page.bgcolor = ft.Colors.with_opacity(1, "#0e1117")
+
+    def etiqueta(tipo, modelo):
+        return modelo if (tipo, modelo) in PERFILES else f"{modelo}  (próximamente)"
+
+    dd_tipo = ft.Dropdown(label="Tipo de equipo:", value="TOLVAS", dense=True,
+                          options=[ft.dropdown.Option(t) for t in CATALOGO_EQUIPOS])
+    dd_modelo = ft.Dropdown(label="Modelo:", dense=True, value="CAT")
+    lbl = ft.Text("", size=13, color=ft.Colors.AMBER_400)
+    btn = ft.Button("Continuar  →", bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, height=50, width=260)
+
+    def refrescar_modelos(e=None):
+        modelos = CATALOGO_EQUIPOS[dd_tipo.value]
+        dd_modelo.options = [ft.dropdown.Option(key=m, text=etiqueta(dd_tipo.value, m)) for m in modelos]
+        if dd_modelo.value not in modelos:
+            dd_modelo.value = modelos[0]
+        refrescar_estado()
+
+    def refrescar_estado(e=None):
+        disponible = (dd_tipo.value, dd_modelo.value) in PERFILES
+        btn.disabled = not disponible
+        lbl.value = "" if disponible else "Este equipo aún no tiene plantilla en la app."
+        page.update()
+
+    def continuar(e=None):
+        perfil = PERFILES.get((dd_tipo.value, dd_modelo.value))
+        if perfil is None:
+            return
+        page.controls.clear()
+        construir_formulario(page, perfil, volver=lambda: mostrar_selector(page))
+        page.update()
+
+    dd_tipo.on_select = refrescar_modelos
+    dd_modelo.on_select = refrescar_estado
+    btn.on_click = continuar
+
+    page.add(
+        ft.Text("🔧 Inspección de Equipos", size=24, weight="bold", color=ft.Colors.BLUE_200),
+        ft.Text("Elige el tipo de equipo y el modelo que vas a inspeccionar.", size=13, color=ft.Colors.GREY_400),
+        ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
+        dd_tipo, dd_modelo, lbl,
+        ft.Container(content=btn, margin=ft.Margin(left=0, top=10, right=0, bottom=0)),
+    )
+    refrescar_modelos()
+
+
+def main(page: ft.Page):
+    mostrar_selector(page)
+
 
 ft.run(main)
