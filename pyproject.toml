@@ -1,7 +1,7 @@
 [project]
 name = "inspeccion-tolvas"
-version = "1.1.0"
-description = "Reporte de Inspeccion de Tolvas CAT 794AC"
+version = "1.2.0"
+description = "INSPKTOR - Inspeccion de equipos"
 requires-python = ">=3.10"
 dependencies = [
     "flet>=1.0",
@@ -13,7 +13,7 @@ dependencies = [
 
 [tool.flet]
 org = "com.dennis.tolvas"
-product = "Inspeccion Tolvas CAT"
+product = "INSPKTOR"
 
 [tool.flet.android.permission]
 "android.permission.CAMERA" = true

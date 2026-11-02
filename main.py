@@ -1190,8 +1190,12 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             lista.clear()
         except Exception:
             pass
-    page.title = perfil["titulo_app"]
-    page.scroll = "adaptive"
+    page.title = "INSPKTOR"
+    page.scroll = None  # el desplazamiento lo maneja la lista (más fluido con muchos controles)
+    lista_pantalla = ft.ListView(expand=True, spacing=0)
+
+    def agregar(*controles):
+        lista_pantalla.controls.extend(controles)
     page.padding = 12
     page.theme_mode = ft.ThemeMode.DARK
     page.bgcolor = ft.Colors.with_opacity(1, "#0e1117")
@@ -1717,8 +1721,8 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
 
     # --- TÍTULO E INFO ---
     if volver is not None:
-        page.add(ft.TextButton("← Cambiar de equipo", on_click=lambda e: volver()))
-    page.add(
+        agregar(ft.TextButton("← Cambiar de equipo", on_click=lambda e: volver()))
+    agregar(
         ft.Text(perfil["titulo_form"], size=22, weight="bold", color=ft.Colors.BLUE_200),
         ft.Container(
             content=ft.Text(
@@ -1806,7 +1810,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
     )
     txt_pm_manual = ft.TextField(label="PM Manual (ej. 1000, 2000, 3000):", value="1000", visible=False, dense=True)
 
-    page.add(
+    agregar(
         ft.ResponsiveRow([
             ft.Column([dd_cliente, txt_cliente_manual, dd_lugar, txt_lugar_manual, txt_fecha_insp], col={"sm": 12, "md": 4}),
             ft.Column([dd_equipo, txt_tolva, txt_horometro], col={"sm": 12, "md": 4}),
@@ -1899,7 +1903,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         visible=False  # Inicia oculto porque el PM inicial es 500H
     )
 
-    page.add(contenedor_matriz_8x7)
+    agregar(contenedor_matriz_8x7)
 
     def obtener_pm_efectivo():
         return txt_pm_manual.value.strip() if dd_pm.value == "[Entrada Manual]" else dd_pm.value
@@ -1919,7 +1923,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         if ruta_ext:
             with open(ruta_ext, "rb") as f_ext:
                 bytes_ext = f_ext.read()
-            page.add(
+            agregar(
                 ft.Text("🗺️ Esquema Guía General de Zonas", size=18, weight="bold", color=ft.Colors.WHITE),
                 ft.Image(src=bytes_ext, height=280, fit="contain", border_radius=8),
                 ft.Text(f"Plano de Ubicación General de Componentes - {perfil['nombre']}", size=11, color=ft.Colors.GREY_400),
@@ -1974,7 +1978,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 )
 
     for idx_z, zona in enumerate(ESTRUCTURA_ZONAS):
-        page.add(ft.Text(zona["titulo"], size=22, weight="bold", color=ft.Colors.BLUE_200))
+        agregar(ft.Text(zona["titulo"], size=22, weight="bold", color=ft.Colors.BLUE_200))
         
         imagenes_row = ft.Row(spacing=20, wrap=True)
         for img_name in zona["esquema"]:
@@ -1990,7 +1994,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                     ft.Text(f"⚠️ No se encontró el esquema '{img_name}' (carpeta {perfil['carpeta_esquemas']})", size=12, color=ft.Colors.AMBER_400)
                 )
         if imagenes_row.controls:
-            page.add(
+            agregar(
                 ft.Text("🗺️ Esquema de referencia de la zona:", size=13, weight="bold", color=ft.Colors.GREY_300),
                 imagenes_row,
                 ft.Divider(height=10, color=ft.Colors.TRANSPARENT)
@@ -2111,8 +2115,8 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 border=ft.Border.all(1, ft.Colors.BLUE_GREY_800),
             )
 
-            page.add(ft.Column([fila_datos, contenedor_fotos_rechazo], spacing=4))
-            page.add(ft.Divider(height=4, color=ft.Colors.TRANSPARENT))
+            agregar(ft.Column([fila_datos, contenedor_fotos_rechazo], spacing=4))
+            agregar(ft.Divider(height=4, color=ft.Colors.TRANSPARENT))
             
         # --- BLOQUES DE LETREROS OBLIGATORIOS (SOLO FOTO PANORÁMICA, FIEL AL ORIGINAL) ---
         if idx_z == perfil["idx_letrero_lateral"]:
@@ -2121,7 +2125,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             controles["img_pano_esp_z2_rh"] = lbl_pano_rh
             controles["img_pano_esp_z2_lh"] = lbl_pano_lh
 
-            page.add(
+            agregar(
                 ft.Container(
                     content=ft.Column([
                         ft.Text("📷 Letreros Obligatorios Especiales: Laterales RH / LH", weight="bold", color=ft.Colors.YELLOW_600, size=14),
@@ -2137,7 +2141,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             lbl_pano_post = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
             controles["img_pano_esp_z8_post"] = lbl_pano_post
 
-            page.add(
+            agregar(
                 ft.Container(
                     content=ft.Column([
                         ft.Text("📷 Letrero Obligatorio Especial: Posterior", weight="bold", color=ft.Colors.YELLOW_600, size=14),
@@ -2153,7 +2157,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 )
             )
 
-        page.add(
+        agregar(
             ft.Text(perfil["leyenda_defectos"], size=11, color=ft.Colors.GREY_500),
             ft.Text(LEYENDA_TECNICA, size=11, color=ft.Colors.GREY_500),
             ft.Divider(height=35, color=ft.Colors.BLUE_GREY_800)
@@ -2163,7 +2167,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
     # SECCIÓN 4: ZONAS A REPARAR (RESUMEN DE OTs)
     # ==========================================================================
     reconstruir_resumen_ots()
-    page.add(
+    agregar(
         ft.Text("4. Resumen de Órdenes de Trabajo (Zonas a Reparar)", size=22, weight="bold", color=ft.Colors.WHITE),
         contenedor_resumen_ots,
         ft.Divider(height=30, color=ft.Colors.BLUE_GREY_700)
@@ -2188,7 +2192,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
     lbl_firma_archivo = ft.Text("Sin imagen de firma seleccionada", size=12, color=ft.Colors.GREY_400)
     controles["firma_upload"] = lbl_firma_archivo
 
-    page.add(
+    agregar(
         ft.Text("5. Firma del Responsable de la Inspección", size=22, weight="bold", color=ft.Colors.WHITE),
         ft.ResponsiveRow([
             ft.Column([dd_nombre_firma, txt_nombre_firma_manual, txt_fecha_firma], col={"sm": 12, "md": 6}),
@@ -2337,7 +2341,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             texto_estado.color = ft.Colors.RED_400
         page.update()
 
-    page.add(
+    agregar(
         ft.Text("6. Generar Reporte Final", size=22, weight="bold", color=ft.Colors.WHITE),
         ft.Container(
             content=ft.Column([
@@ -2349,6 +2353,9 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         )
     )
 
+    page.add(lista_pantalla)
+    page.update()
+
 
 def mostrar_selector(page: ft.Page):
     """Primera pantalla: elegir tipo de equipo y modelo."""
@@ -2358,7 +2365,7 @@ def mostrar_selector(page: ft.Page):
         except Exception:
             pass
     page.controls.clear()
-    page.title = "Sistema de Inspección de Equipos"
+    page.title = "INSPKTOR"
     page.scroll = "adaptive"
     page.padding = 12
     page.theme_mode = ft.ThemeMode.DARK
@@ -2398,12 +2405,30 @@ def mostrar_selector(page: ft.Page):
     dd_modelo.on_select = refrescar_estado
     btn.on_click = continuar
 
+    cabecera = []
+    ruta_logo = buscar_recurso("logo.png")
+    if ruta_logo:
+        try:
+            with open(ruta_logo, "rb") as f_logo:
+                cabecera.append(ft.Image(src=f_logo.read(), height=130, fit="contain"))
+        except Exception:
+            pass
+    cabecera += [
+        ft.Text("INSPKTOR", size=34, weight="bold", color=ft.Colors.BLUE_200, text_align="center"),
+        ft.Text("Inspección de equipos", size=14, color=ft.Colors.GREY_400, text_align="center"),
+    ]
     page.add(
-        ft.Text("🔧 Inspección de Equipos", size=24, weight="bold", color=ft.Colors.BLUE_200),
-        ft.Text("Elige el tipo de equipo y el modelo que vas a inspeccionar.", size=13, color=ft.Colors.GREY_400),
-        ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
-        dd_tipo, dd_modelo, lbl,
-        ft.Container(content=btn, margin=ft.Margin(left=0, top=10, right=0, bottom=0)),
+        ft.Column(cabecera, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+        ft.Divider(height=18, color=ft.Colors.TRANSPARENT),
+        ft.Container(
+            content=ft.Column([
+                ft.Text("¿Qué equipo vas a inspeccionar?", size=15, weight="bold", color=ft.Colors.WHITE),
+                dd_tipo, dd_modelo, lbl,
+                ft.Container(content=btn, alignment=ft.Alignment.CENTER, margin=ft.Margin(left=0, top=8, right=0, bottom=0)),
+            ], spacing=12),
+            padding=18, bgcolor=ft.Colors.with_opacity(1, "#121722"), border_radius=14,
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_800),
+        ),
     )
     refrescar_modelos()
 
