@@ -6,7 +6,9 @@ from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.worksheet.properties import PageSetupProperties
 import os
 import io
+from copy import copy
 import asyncio
+import time
 import tempfile
 import math
 import zipfile
@@ -14,7 +16,7 @@ import re
 import json
 from PIL import Image, ImageOps, ImageDraw
 import flet.canvas as cv
-from datetime import date
+from datetime import date, datetime
 
 try:  # opcional: si el APK incluye pillow-heif, también se leen fotos .heic
     import pillow_heif
@@ -97,6 +99,7 @@ _NOMBRE_COMPLETO_DEFECTO = {
     "DE": "DESGASTE",
     "DP": "DESPRENDIMIENTO PARCIAL",
     "F": "FISURA",
+    "FN": "FISURA NUEVA",
     "FA": "FRACTURA",
     "LF": "LIBRE DE FISURAS",
 }
@@ -125,7 +128,9 @@ ESTRUCTURA_ZONAS = [
             ("2.1", "PLANCHA LATERAL RH", "VT"),
             ("2.2", "VIGA CAJÓN LATERAL RH", "VT"),
             ("2.3", "PLANCHA LATERAL LH", "VT"),
-            ("2.4", "VIGA CAJÓN LATERAL LH", "VT")
+            ("2.4", "VIGA CAJÓN LATERAL LH", "VT"),
+            ("2.5", "SIDE BOARD RH", "VT"),
+            ("2.6", "SIDE BOARD LH", "VT")
         ]
     },
     {
@@ -153,7 +158,8 @@ ESTRUCTURA_ZONAS = [
             ("4.3", "PLANCHA FRONTAL LH", "VT"),
             ("5.1", "PLANCHA DE PISO RH", "VT/UT"),
             ("5.2", "PLANCHA DE PISO LH", "VT/UT"),
-            ("5.3", "PLANCHA COLA DE PISO", "VT/UT")
+            ("5.3", "PLANCHA COLA DE PISO", "VT/UT"),
+            ("5.4", "EXTENSIÓN DE COLA", "VT")
         ]
     },
     {
@@ -216,7 +222,9 @@ ESTRUCTURA_ZONAS_DT = [
             ("2.11", "BARRA SECUNDARIA RH", "VT"),
             ("2.12", "REFUERZO PRINCIPAL PISO RH", "VT"),
             ("2.13", "REFUERZO SECUNDARIO PISO RH", "VT"),
-            ("2.14", "LATERAL RH", "VT")
+            ("2.14", "LATERAL RH", "VT"),
+            ("2.15", "SIDE BOARD RH", "VT"),
+            ("2.16", "SIDE BOARD LH", "VT")
         ]
     },
     {
@@ -253,7 +261,8 @@ ESTRUCTURA_ZONAS_DT = [
             ("5.3", "PLANCHA FRONTAL PL2 DERECHA", "VT"),
             ("5.4", "PLANCHA FRONTAL PL2 IZQUIERDA", "VT"),
             ("5.5", "PLANCHA FRONTAL PL3 DERECHA", "VT"),
-            ("5.6", "PLANCHA FRONTAL PL3 IZQUIERDA", "VT")
+            ("5.6", "PLANCHA FRONTAL PL3 IZQUIERDA", "VT"),
+            ("5.7", "EXTENSIÓN DE COLA", "VT")
         ]
     },
     {
@@ -338,16 +347,17 @@ PERFIL_TOLVA_CAT = {
     # filas del cierre de la plantilla (OTs, nombre, firma, fecha)
     "cierre": {"fila_ot": 148, "fila_ot_max": 155, "fila_nombre": 157, "fila_firma": 160,
                "firma_filas": 2, "fila_fecha": 162, "fila_final": 162},
-    "prefijo_informe": "ZA-IF",
+    "prefijo_informe": "ZAM-IF",
     "db_prefijo": "",
     "idx_letrero_lateral": 1,
     "idx_letrero_posterior": 5,
     "defectos": ["LF", "D", "DE", "DP", "F", "FA"],
     "leyenda_defectos": "Leyenda Defectos: D: Desprendimiento | DE: Desgaste | DP: Desprendimiento Parcial | F: Fisurado | LF: Libre de fisura (Aceptable)",
+    "items_extra": {1: 2, 3: 1},
     "hoja2_desde_openpyxl": False,
     "limpiar_fuera_de_area": False,
     "factor_pagina": 1.0,
-    "desplazar_alturas": False,
+    "desplazar_alturas": True,
 }
 
 PERFIL_TOLVA_DT = {
@@ -365,12 +375,13 @@ PERFIL_TOLVA_DT = {
     "matriz": {"remerge": False, "fila_ini": 9, "fila_fin": 27},
     "cierre": {"fila_ot": 198, "fila_ot_max": 205, "fila_nombre": 207, "fila_firma": 208,
                "firma_filas": 3, "fila_fecha": 211, "fila_final": 211},
-    "prefijo_informe": "ZMN-IF",
+    "prefijo_informe": "ZAM-IF",
     "db_prefijo": "DT:",
     "idx_letrero_lateral": 1,
     "idx_letrero_posterior": 5,
     "defectos": ["LF", "D", "DE", "DP", "F", "FN"],
     "leyenda_defectos": "Leyenda Defectos: D: Desprendimiento | DE: Desgaste | DP: Desprendimiento Parcial | F: Fisurado | FN: Fisura nueva | LF: Libre de fisura (Aceptable)",
+    "items_extra": {1: 2, 3: 1},
     "hoja2_desde_openpyxl": True,
     "limpiar_fuera_de_area": True,
     "factor_pagina": 0.94,
@@ -439,6 +450,24 @@ def _sin_tildes(valor):
         return ""
     t = unicodedata.normalize("NFD", str(valor))
     return "".join(ch for ch in t if unicodedata.category(ch) != "Mn").strip().upper()
+
+def _separar_pics_en_caja(xml_texto, fila0_ini, fila0_fin, col0_min, col0_max):
+    """Quita las imágenes de la plantilla que están dentro de una caja de celdas y devuelve sus rId."""
+    encontrados = []
+    def procesar(m):
+        bloque = m.group(0)
+        if "<xdr:pic>" not in bloque:
+            return bloque
+        m_from = re.search(r'<xdr:from><xdr:col>(\d+)</xdr:col>.*?<xdr:row>(\d+)</xdr:row>', bloque, re.DOTALL)
+        m_emb = re.search(r'r:embed="(rId\d+)"', bloque)
+        if m_from and m_emb:
+            c0, r0 = int(m_from.group(1)), int(m_from.group(2))
+            if col0_min <= c0 <= col0_max and fila0_ini <= r0 <= fila0_fin:
+                encontrados.append(m_emb.group(1))
+                return ""
+        return bloque
+    nuevo = re.sub(r'<xdr:(twoCellAnchor|oneCellAnchor|absoluteAnchor)\b.*?</xdr:\1>', procesar, xml_texto, flags=re.DOTALL)
+    return nuevo, encontrados
 
 def _quitar_anchors_fuera_de_area(xml_texto, col_min_0idx=18):
     """Quita imágenes/figuras sueltas que la plantilla guarda a la derecha del área de impresión."""
@@ -628,6 +657,24 @@ class _Geometria:
             acc += h
             r += 1
 
+def _xml_pic_anchor(id_imagen, nombre, rid, geo, px, py, cx, cy, src_rect=""):
+    c, c_off = geo.col_en(px)
+    r, r_off = geo.fila_en(py)
+    return (
+        f'<xdr:oneCellAnchor>'
+        f'<xdr:from><xdr:col>{c}</xdr:col><xdr:colOff>{c_off}</xdr:colOff>'
+        f'<xdr:row>{r}</xdr:row><xdr:rowOff>{r_off}</xdr:rowOff></xdr:from>'
+        f'<xdr:ext cx="{cx}" cy="{cy}"/>'
+        f'<xdr:pic>'
+        f'<xdr:nvPicPr><xdr:cNvPr id="{id_imagen}" name="{nombre}{id_imagen}"/>'
+        f'<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>'
+        f'<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{rid}"/>{src_rect}'
+        f'<a:stretch><a:fillRect/></a:stretch></xdr:blipFill>'
+        f'<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>'
+        f'</xdr:pic><xdr:clientData/></xdr:oneCellAnchor>'
+    )
+
 def _anchor_imagen_ajustada_xml(geo, id_imagen, nombre, rid, bytes_img,
                                 col_ini, col_fin, fila_ini, fila_fin, margen=60000,
                                 es_foto=False):
@@ -654,22 +701,7 @@ def _anchor_imagen_ajustada_xml(geo, id_imagen, nombre, rid, bytes_img,
 
     px = x0 + margen + (ancho - cx) // 2
     py = y0 + margen + (alto - cy) // 2
-    c, c_off = geo.col_en(px)
-    r, r_off = geo.fila_en(py)
-    return (
-        f'<xdr:oneCellAnchor>'
-        f'<xdr:from><xdr:col>{c}</xdr:col><xdr:colOff>{c_off}</xdr:colOff>'
-        f'<xdr:row>{r}</xdr:row><xdr:rowOff>{r_off}</xdr:rowOff></xdr:from>'
-        f'<xdr:ext cx="{cx}" cy="{cy}"/>'
-        f'<xdr:pic>'
-        f'<xdr:nvPicPr><xdr:cNvPr id="{id_imagen}" name="{nombre}{id_imagen}"/>'
-        f'<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>'
-        f'<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{rid}"/>{src_rect}'
-        f'<a:stretch><a:fillRect/></a:stretch></xdr:blipFill>'
-        f'<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
-        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>'
-        f'</xdr:pic><xdr:clientData/></xdr:oneCellAnchor>'
-    )
+    return _xml_pic_anchor(id_imagen, nombre, rid, geo, px, py, cx, cy, src_rect)
 
 estado_app = {}
 rutas_fotos = {}
@@ -797,6 +829,33 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         fila_inicio_items = fila_header + 2
         num_items = len(bloque_zona["items"])
 
+        # puntos de inspección que la plantilla todavía no tiene: se agregan filas al final de la tabla
+        n_extra = perfil.get("items_extra", {}).get(idx_z, 0)
+        if n_extra:
+            fila_ref = fila_inicio_items + (num_items - n_extra) - 1      # última fila de ítem de la plantilla
+            fila_ins = fila_ref + 1                                        # fila de leyenda actual
+            merges_ref = [(m.min_col, m.max_col) for m in ws.merged_cells.ranges
+                          if m.min_row == fila_ref and m.max_row == fila_ref]
+            alto_ref = ws.row_dimensions[fila_ref].height
+            _insertar_filas_seguro(ws, fila_ins, n_extra)
+            for k in range(n_extra):
+                fila_nueva = fila_ins + k
+                for col in range(1, 19):
+                    origen = ws.cell(row=fila_ref, column=col)
+                    destino = ws.cell(row=fila_nueva, column=col)
+                    if origen.has_style:
+                        destino._style = copy(origen._style)
+                for (c1, c2) in merges_ref:
+                    if c2 > c1:
+                        ws.merge_cells(start_row=fila_nueva, start_column=c1, end_row=fila_nueva, end_column=c2)
+                if alto_ref:
+                    ws.row_dimensions[fila_nueva].height = alto_ref
+                cod_n, desc_n, _t = bloque_zona["items"][num_items - n_extra + k]
+                ws.cell(row=fila_nueva, column=1, value=cod_n)
+                ws.cell(row=fila_nueva, column=2, value=desc_n)
+            puntos_insercion.append((fila_ins, n_extra, int((alto_ref or 30) * n_extra)))
+            desplazamiento += n_extra
+
         if fila_legend_zona_anterior is not None:
             fila_proteccion_inicio = fila_legend_zona_anterior + 1
         else:
@@ -827,23 +886,43 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             key_id = f"z{idx_z}_{idx_i}"
             fila = fila_inicio_items + idx_i
 
-            defecto = estado_app.get(f"def_{key_id}", "LF")
-            es_lf = (defecto == "LF")
+            defecto_main = estado_app.get(f"def_{key_id}", "LF")
+            cond_main = estado_app.get(f"cond_{key_id}") or ("ACEPTABLE" if defecto_main == "LF" else "RECHAZADO")
+            extras_punto = [r for r in todos_los_rechazos if r.get("punto_id") == key_id and r.get("es_extra")]
 
-            if es_lf:
-                longitud = "-"
-                est_post = "-"
-                condicion = "ACEPTABLE"
-                comentario = "-"
-            else:
-                opc_long = estado_app.get(f"opclong_{key_id}", "Manual")
-                if opc_long == "VARIOS":
-                    longitud = "VARIOS"
+            def _long_de(clave):
+                if estado_app.get(f"opclong_{clave}", "Manual") == "VARIOS":
+                    return "VARIOS"
+                return str(estado_app.get(f"longval_{clave}", "100"))
+
+            def _unicos(valores):
+                vistos = []
+                for v in valores:
+                    if v not in vistos:
+                        vistos.append(v)
+                return " / ".join(vistos)
+
+            if defecto_main == "LF" and not extras_punto:
+                defecto = "LF"
+                condicion = cond_main
+                if cond_main in ("MN", "NI"):   # MN / NI: el resto de la fila se llena con normalidad
+                    longitud = _long_de(key_id) if estado_app.get(f"longval_{key_id}", "-") not in ("-", "") else "-"
+                    est_post = estado_app.get(f"est_{key_id}", "-")
+                    comentario = estado_app.get(f"com_{key_id}", "-")
                 else:
-                    longitud = estado_app.get(f"longval_{key_id}", "100")
-                est_post = estado_app.get(f"est_{key_id}", "NR")
-                condicion = "RECHAZADO"
-                comentario = estado_app.get(f"com_{key_id}", "CREAR OT")
+                    longitud, est_post, comentario = "-", "-", "-"
+            else:
+                entradas = []
+                if defecto_main != "LF":
+                    entradas.append((defecto_main, _long_de(key_id), estado_app.get(f"est_{key_id}", "NR"), estado_app.get(f"com_{key_id}", "CREAR OT")))
+                for r in extras_punto:
+                    entradas.append((r["defecto"], str(r["longitud"]), r["est_post"], r["comentario"]))
+                defecto = _unicos([e[0] for e in entradas])
+                longitud = " / ".join(e[1] for e in entradas)
+                est_post = _unicos([e[2] for e in entradas])
+                comentario = _unicos([e[3] for e in entradas])
+                condicion = "RECHAZADO" if extras_punto else cond_main
+            es_lf = (condicion != "RECHAZADO")
 
             tecnica = estado_app.get(f"tec_{key_id}", tec_def)
 
@@ -910,7 +989,12 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                 fila_medida_hasta = fila_fin
 
                 key_id = rechazo["key_id"]
-                texto_desc = f"ZONA {rechazo['zona']}\n{rechazo['descripcion'].upper()}\n\n{_NOMBRE_COMPLETO_DEFECTO.get(rechazo['defecto'], rechazo['defecto'])}"
+                nombre_def_completo = _NOMBRE_COMPLETO_DEFECTO.get(rechazo['defecto'], rechazo['defecto'])
+                extra_txt = (rechazo.get("extra_desc") or "").strip().upper()
+                if extra_txt:
+                    texto_desc = f"ZONA {rechazo['zona']}\n{rechazo['descripcion'].upper()}\n\n{extra_txt}\n\n{nombre_def_completo}"
+                else:
+                    texto_desc = f"ZONA {rechazo['zona']}\n{rechazo['descripcion'].upper()}\n\n{nombre_def_completo}"
                 ws.cell(row=fila_ini, column=1, value=texto_desc)
 
                 for prefijo_foto, col_0idx, col_span in (("pano", 4, 7), ("det", 11, 7)):
@@ -957,6 +1041,26 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     fila_ot = cierre["fila_ot"] + desplazamiento
     ws.row_breaks.append(Break(id=fila_ot - 2))
     fila_ot_max = cierre["fila_ot_max"] + desplazamiento
+    ots_extra = len(todos_los_rechazos) - (fila_ot_max - fila_ot + 1)
+    if ots_extra > 0:
+        merges_ot = [(m.min_col, m.max_col) for m in ws.merged_cells.ranges
+                     if m.min_row == fila_ot_max and m.max_row == fila_ot_max]
+        alto_ot = ws.row_dimensions[fila_ot_max].height
+        _insertar_filas_seguro(ws, fila_ot_max + 1, ots_extra)
+        for k in range(ots_extra):
+            fila_nueva = fila_ot_max + 1 + k
+            for col in range(1, 19):
+                origen = ws.cell(row=fila_ot_max, column=col)
+                if origen.has_style:
+                    ws.cell(row=fila_nueva, column=col)._style = copy(origen._style)
+            for (c1, c2) in merges_ot:
+                if c2 > c1:
+                    ws.merge_cells(start_row=fila_nueva, start_column=c1, end_row=fila_nueva, end_column=c2)
+            if alto_ot:
+                ws.row_dimensions[fila_nueva].height = alto_ot
+        puntos_insercion.append((fila_ot_max + 1, ots_extra, int((alto_ot or 25) * ots_extra)))
+        desplazamiento += ots_extra
+        fila_ot_max += ots_extra
     for idx_ot, rechazo in enumerate(todos_los_rechazos):
         if fila_ot > fila_ot_max:
             break
@@ -964,7 +1068,8 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         prefijo = "SOLD_CBO" if defecto == "DE" else "SOLD_REP"
         codigo_sugerido = f"BK00{str(idx_ot + 1).zfill(5)}"
         codigo_backlog = estado_app.get(f"bk_{rechazo['key_id']}", codigo_sugerido)
-        texto_ot = f"{prefijo} {rechazo['descripcion']} ({rechazo['zona']}) - {codigo_backlog}"
+        extra_ot = (rechazo.get("extra_desc") or "").strip().upper()
+        texto_ot = f"{prefijo} {rechazo['descripcion']} ({rechazo['zona']}){(' ' + extra_ot) if extra_ot else ''} - {codigo_backlog}"
         try:
             celda_ot = ws.cell(row=fila_ot, column=1, value=texto_ot)
             celda_ot.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
@@ -985,14 +1090,12 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         pass
 
     if firma_ruta and os.path.exists(firma_ruta):
-        img_firma = Image.open(firma_ruta).convert("RGB")
+        img_firma = ImageOps.exif_transpose(Image.open(firma_ruta))
+        img_firma = img_firma.convert("RGBA") if ("A" in img_firma.getbands() or img_firma.mode == "P") else img_firma.convert("RGB")
         buf_firma = io.BytesIO()
         img_firma.save(buf_firma, format="PNG")
         fotos_pendientes.append({
-            "fila_0idx": fila_firma - 1,
-            "col_0idx": 1,
-            "col_span": 3,
-            "row_span": cierre["firma_filas"],
+            "firma": True,
             "bytes_png": buf_firma.getvalue(),
         })
 
@@ -1021,8 +1124,9 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         if nombre in z_temp.namelist():
             xml_data = z_temp.read(nombre).decode('utf-8')
             if nombre == 'xl/worksheets/sheet1.xml':
-                xml_data = re.sub(r'<[a-zA-Z0-9]*:?drawing r:id=".*?"\s*/>', '', xml_data)
-                xml_data = re.sub(r'<[a-zA-Z0-9]*:?drawing r:id=".*?">.*?</[a-zA-Z0-9]*:?drawing>', '', xml_data)
+                xml_data = re.sub(r'<drawing\b[^>]*/>', '', xml_data)
+                xml_data = re.sub(r'<drawing\b[^>]*>.*?</drawing>', '', xml_data, flags=re.DOTALL)
+                xml_data = re.sub(r'<legacyDrawing\b[^>]*/>', '', xml_data)
                 if match_drawing:
                     tag_drawing = match_drawing.group(0)
                     if 'xmlns:r=' not in tag_drawing:
@@ -1033,9 +1137,9 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     if perfil.get("hoja2_desde_openpyxl") and 'xl/worksheets/sheet2.xml' in z_temp.namelist():
         s2_orig = z_original.read('xl/worksheets/sheet2.xml').decode('utf-8')
         s2_new = z_temp.read('xl/worksheets/sheet2.xml').decode('utf-8')
-        s2_new = re.sub(r'<[a-zA-Z0-9]*:?drawing r:id=".*?"\s*/>', '', s2_new)
-        s2_new = re.sub(r'<[a-zA-Z0-9]*:?legacyDrawing r:id=".*?"\s*/>', '', s2_new)
-        m_dr2 = re.search(r'<[a-zA-Z0-9]*:?drawing r:id=".*?"\s*/>', s2_orig)
+        s2_new = re.sub(r'<drawing\b[^>]*/>', '', s2_new)
+        s2_new = re.sub(r'<legacyDrawing\b[^>]*/>', '', s2_new)
+        m_dr2 = re.search(r'<drawing\b[^>]*/>', s2_orig)
         if m_dr2:
             tag2 = m_dr2.group(0)
             if 'xmlns:r=' not in tag2:
@@ -1059,6 +1163,26 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         drawing1_xml = _desplazar_filas_drawing_xml(drawing1_xml, fila_insercion - 1, cantidad, altura_emu)
 
     geo = _Geometria(ws)
+
+    # Caja de la firma: columnas B..F, filas entre NOMBRE y FECHA (la etiqueta "FIRMA:" queda libre en la columna A)
+    caja_firma = (geo.x(1), geo.y(fila_nombre), geo.x(6), geo.y(fila_fecha - 1))
+    drawing1_xml, firmas_plantilla = _separar_pics_en_caja(drawing1_xml, fila_nombre, fila_fecha - 2, 1, 6)
+    hay_firma_nueva = any(f.get("firma") for f in fotos_pendientes)
+    anchor_firma_plantilla_xml = ""
+    if firmas_plantilla and not hay_firma_nueva:
+        try:
+            rid_f = firmas_plantilla[0]
+            destino_f = re.search(r'Id="%s"[^>]*Target="([^"]+)"|Target="([^"]+)"[^>]*Id="%s"' % (rid_f, rid_f), drawing1_rels)
+            ruta_media_f = (destino_f.group(1) or destino_f.group(2)).replace("../", "xl/")
+            iw_f, ih_f = Image.open(io.BytesIO(z_original.read(ruta_media_f))).size
+            bw_f, bh_f = caja_firma[2] - caja_firma[0], caja_firma[3] - caja_firma[1]
+            esc_f = min(0.80 * bw_f / iw_f, 0.88 * bh_f / ih_f)
+            cx_f, cy_f = int(iw_f * esc_f), int(ih_f * esc_f)
+            anchor_firma_plantilla_xml = _xml_pic_anchor(
+                7900, "FirmaPlantilla", rid_f, geo,
+                int(caja_firma[0] + (bw_f - cx_f) / 2), int(caja_firma[1] + (bh_f - cy_f) / 2), cx_f, cy_f)
+        except Exception:
+            anchor_firma_plantilla_xml = ""
     rids_existentes = re.findall(r'Id="rId(\d+)"', drawing1_rels)
     siguiente_rid = max((int(r) for r in rids_existentes), default=0) + 1
 
@@ -1072,17 +1196,36 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             continue
         drawing1_xml = _quitar_anchors_en_ventana(drawing1_xml, fila_ini_0idx, fila_fin_0idx)
 
-        nombres_png = ventana["esquemas"]
-        n_imgs = len(nombres_png)
-        ancho_total_cols = 18
-        for idx_img, nombre_png in enumerate(nombres_png):
+        # Todos los esquemas de la ventana se dibujan con la MISMA altura (la mayor posible) y
+        # un ancho proporcional a su forma, sin deformarlos. Así ninguno queda muy chico.
+        margen_esq = 40000
+        datos_ventana = []
+        for nombre_png in ventana["esquemas"]:
             ruta_png = buscar_recurso(perfil["carpeta_esquemas"], nombre_png) or os.path.join(perfil["carpeta_esquemas"], nombre_png)
-            if not os.path.exists(ruta_png):
-                continue
-            col_ini = int(idx_img * ancho_total_cols / n_imgs)
-            col_fin = int((idx_img + 1) * ancho_total_cols / n_imgs)
-            with open(ruta_png, "rb") as f_img:
-                datos_png = f_img.read()
+            if os.path.exists(ruta_png):
+                with open(ruta_png, "rb") as f_img:
+                    b_img = f_img.read()
+                iw_e, ih_e = Image.open(io.BytesIO(b_img)).size
+                if iw_e > 0 and ih_e > 0:
+                    datos_ventana.append((b_img, iw_e / ih_e))
+        if not datos_ventana:
+            continue
+        x_ini_v, x_fin_v = geo.x(0), geo.x(18)
+        y_ini_v, y_fin_v = geo.y(fila_ini_0idx), geo.y(fila_fin_0idx + 1)
+        ancho_disp = (x_fin_v - x_ini_v) - 2 * margen_esq
+        alto_disp = (y_fin_v - y_ini_v) - 2 * margen_esq
+        sep = 2 * margen_esq
+        n_v = len(datos_ventana)
+        suma_asp = sum(a for _b, a in datos_ventana)
+        alto_comun = min(alto_disp, (ancho_disp - (n_v - 1) * sep) / suma_asp)
+        if alto_comun <= 0:
+            continue
+        usado = sum(a * alto_comun for _b, a in datos_ventana) + (n_v - 1) * sep
+        x_cursor = x_ini_v + margen_esq + (ancho_disp - usado) / 2
+        py_v = y_ini_v + margen_esq + (alto_disp - alto_comun) / 2
+        for idx_img, (datos_png, asp_img) in enumerate(datos_ventana):
+            cx_e = int(asp_img * alto_comun)
+            cy_e = int(alto_comun)
             nombre_media = f"esquema{siguiente_rid}.png"
             rid_actual = f"rId{siguiente_rid}"
             drawing1_rels = re.sub(
@@ -1090,10 +1233,10 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                 lambda m, nm=nombre_media, rid=rid_actual: f'<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{nm}" Id="{rid}"/>' + m.group(0),
                 drawing1_rels
             )
-            anchors_esquemas_xml += _anchor_imagen_ajustada_xml(
-                geo, id_shape_esquema, "EsquemaZona", rid_actual, datos_png,
-                col_ini, col_fin, fila_ini_0idx, fila_fin_0idx + 1, margen=40000
+            anchors_esquemas_xml += _xml_pic_anchor(
+                id_shape_esquema, "EsquemaZona", rid_actual, geo, int(x_cursor), int(py_v), cx_e, cy_e
             )
+            x_cursor += cx_e + sep
             media_esquemas_pendientes[f"xl/media/{nombre_media}"] = datos_png
             siguiente_rid += 1
             id_shape_esquema += 1
@@ -1105,7 +1248,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     )
 
     media_nuevos = dict(media_esquemas_pendientes)
-    anchors_nuevos_xml = ""
+    anchors_nuevos_xml = anchor_firma_plantilla_xml
     id_shape = 9000
 
     for foto in fotos_pendientes:
@@ -1119,6 +1262,17 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             drawing1_rels
         )
         
+        if foto.get("firma"):
+            iw_f, ih_f = Image.open(io.BytesIO(foto["bytes_png"])).size
+            bw_f, bh_f = caja_firma[2] - caja_firma[0], caja_firma[3] - caja_firma[1]
+            esc_f = min(0.80 * bw_f / iw_f, 0.88 * bh_f / ih_f)
+            cx_f, cy_f = int(iw_f * esc_f), int(ih_f * esc_f)
+            anchors_nuevos_xml += _xml_pic_anchor(
+                id_shape, "FirmaApp", rid_actual, geo,
+                int(caja_firma[0] + (bw_f - cx_f) / 2), int(caja_firma[1] + (bh_f - cy_f) / 2), cx_f, cy_f)
+            siguiente_rid += 1
+            id_shape += 1
+            continue
         anchors_nuevos_xml += _anchor_imagen_ajustada_xml(
             geo, id_shape, "FotoApp", rid_actual, foto["bytes_png"],
             foto["col_0idx"], foto["col_0idx"] + foto["col_span"],
@@ -1181,6 +1335,13 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
 # ==============================================================================
 # 3. INTERFAZ GRÁFICA EN FLET 1.0+ (100% FIEL A STREAMLIT)
 # ==============================================================================
+def fecha_a_iso(texto):
+    """'02/11/2026' -> '2026-11-02'; devuelve None si no es una fecha válida."""
+    try:
+        return datetime.strptime((texto or "").strip(), "%d/%m/%Y").strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
 def construir_formulario(page: ft.Page, perfil, volver=None):
     ESTRUCTURA_ZONAS = perfil["estructura"]
     estado_app.clear()
@@ -1291,17 +1452,17 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         im.save(ruta, "JPEG", quality=88)
         return ruta
 
-    def procesar_foto(llave, datos, nombre):
+    def procesar_foto(llave, datos, nombre, origen="galeria"):
         try:
             im = abrir_imagen(datos)
             im.thumbnail((2000, 2000))
         except Exception:
             marcar_error(llave, MSG_FORMATO)
             return
-        abrir_editor(llave, im, nombre)
+        abrir_editor(llave, im, nombre, origen)
 
     # --- Editor de anotaciones (rectángulo, círculo, flecha, lápiz) ---
-    def abrir_editor(llave, im, nombre):
+    def abrir_editor(llave, im, nombre, origen="galeria"):
         iw, ih = im.size
         vista = im.copy()
         vista.thumbnail((1400, 1400))
@@ -1354,11 +1515,22 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             lienzo.shapes = shapes
             lienzo.update()
 
+        async def vigilar_enderezado(forma):
+            # si el dedo se queda quieto ~0.6 s, el trazo se convierte en una recta
+            while est["actual"] is forma:
+                await asyncio.sleep(0.12)
+                if (est["actual"] is forma and not forma.get("recta") and len(forma["datos"]) > 2
+                        and time.monotonic() - forma.get("t_mov", 0) > 0.6):
+                    forma["datos"] = [forma["datos"][0], forma["datos"][-1]]
+                    forma["recta"] = True
+                    dibujar()
+
         def pan_start(e):
             x = clamp01(e.local_position.x / est["dw"])
             y = clamp01(e.local_position.y / est["dh"])
             if est["herr"] == "lapiz":
-                est["actual"] = {"tipo": "lapiz", "color": est["color"], "datos": [(x, y)]}
+                est["actual"] = {"tipo": "lapiz", "color": est["color"], "datos": [(x, y)], "t_mov": time.monotonic()}
+                page.run_task(vigilar_enderezado, est["actual"])
             else:
                 est["actual"] = {"tipo": est["herr"], "color": est["color"], "datos": [x, y, x, y]}
 
@@ -1369,7 +1541,11 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             x = clamp01(e.local_position.x / est["dw"])
             y = clamp01(e.local_position.y / est["dh"])
             if f["tipo"] == "lapiz":
-                f["datos"].append((x, y))
+                f["t_mov"] = time.monotonic()
+                if f.get("recta"):
+                    f["datos"][1] = (x, y)
+                else:
+                    f["datos"].append((x, y))
             else:
                 f["datos"][2], f["datos"][3] = x, y
             dibujar()
@@ -1379,7 +1555,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             est["actual"] = None
             if f:
                 d = f["datos"]
-                valido = len(d) > 3 if f["tipo"] == "lapiz" else (abs(d[2] - d[0]) > 0.006 or abs(d[3] - d[1]) > 0.006)
+                valido = (len(d) > 3 or f.get("recta")) if f["tipo"] == "lapiz" else (abs(d[2] - d[0]) > 0.006 or abs(d[3] - d[1]) > 0.006)
                 if valido:
                     formas.append(f)
             dibujar()
@@ -1503,6 +1679,10 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                     ft.OutlinedButton("Sin anotar", on_click=lambda e: guardar(False)),
                     ft.TextButton("Cancelar", on_click=cerrar_editor),
                 ], wrap=True, spacing=6, run_spacing=4),
+                ft.OutlinedButton(
+                    "📷 Volver a tomar" if origen == "camara" else "🖼️ Elegir otra",
+                    on_click=lambda e: (cerrar_editor(), abrir_camara(llave) if origen == "camara" else abrir_selector(llave)),
+                ),
             ], spacing=6),
         )
         caja = ft.Container(content=area, alignment=ft.Alignment.CENTER, left=0, top=0, right=0, bottom=0)
@@ -1552,7 +1732,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         lista_camaras = []
 
         panel = ft.Container(
-            bgcolor=ft.Colors.with_opacity(0.65, ft.Colors.BLACK), padding=10,
+            bgcolor=ft.Colors.with_opacity(0.28, ft.Colors.BLACK), padding=8,
             content=ft.Column([
                 estado_cam, etq_zoom, sld_zoom, fila_zoom, dd_cam,
                 ft.Row([btn_tomar, ft.TextButton("Cancelar", on_click=lambda e: cerrar())], wrap=True, spacing=8),
@@ -1565,11 +1745,11 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         def ubicar():
             W, H = tam_pantalla()
             if W > H:
-                panel.left, panel.right, panel.top, panel.bottom, panel.width = None, 0, 0, 0, 230
-                disp_w, disp_h = W - 240, H - 30
+                panel.left, panel.right, panel.top, panel.bottom, panel.width = None, 0, 0, 0, 210
+                disp_w, disp_h = W, H - 20
                 bh = min(disp_h, disp_w / RATIO_CAM)
                 bw = bh * RATIO_CAM
-                fondo.right = 230
+                fondo.right = 0
                 fondo.alignment = ft.Alignment.CENTER
             else:
                 panel.left, panel.right, panel.top, panel.bottom, panel.width = 0, 0, None, 0, None
@@ -1662,7 +1842,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 page.update()
                 datos = await camara.take_picture()
                 cerrar()
-                procesar_foto(llave, datos, "foto de cámara")
+                procesar_foto(llave, datos, "foto de cámara", "camara")
             except Exception as ex:
                 estado_cam.value = f"Error al capturar: {ex}"
                 btn_tomar.disabled = False
@@ -1936,6 +2116,105 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
     # ==========================================================================
     contenedor_resumen_ots = ft.Column(spacing=8)
 
+    extras_por_punto = {}
+    CONDICIONES = ["ACEPTABLE", "RECHAZADO", "MN", "NI"]
+    COMENTARIOS = ["-", "CREAR OT", "OT CREADA", "PROG. REPARACIÓN", "SIN ACCESO"]
+
+    def aviso(titulo, texto):
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text(titulo), content=ft.Text(texto),
+            actions=[ft.TextButton("Entendido", on_click=lambda ev: page.pop_dialog())],
+        ))
+
+    def limpiar_extras(key_id):
+        info = extras_por_punto.get(key_id)
+        if not info:
+            return
+        for E in list(info["ids"]):
+            quitar_extra(key_id, E, actualizar=False)
+
+    def quitar_extra(key_id, E, actualizar=True):
+        info = extras_por_punto[key_id]
+        card = info["cards"].pop(E, None)
+        if card is not None and card in info["cont"].controls:
+            info["cont"].controls.remove(card)
+        if E in info["ids"]:
+            info["ids"].remove(E)
+        for prefijo in ("def_", "opclong_", "longval_", "est_", "com_", "desc_", "img_pano_", "img_det_", "bk_"):
+            controles.pop(prefijo + E, None)
+        rutas_fotos.pop("img_pano_" + E, None)
+        rutas_fotos.pop("img_det_" + E, None)
+        if actualizar:
+            reconstruir_resumen_ots()
+            page.update()
+
+    def agregar_extra(key_id, cod_z, desc_z):
+        info = extras_por_punto[key_id]
+        info["n"] += 1
+        E = f"{key_id}_x{info['n']}"
+        defectos_x = [d for d in perfil["defectos"] if d != "LF"]
+
+        dd_def_x = ft.Dropdown(options=[ft.dropdown.Option(x) for x in defectos_x], value=defectos_x[0],
+                               width=130, dense=True, text_size=13, label="Defecto",
+                               on_select=lambda ev: (reconstruir_resumen_ots(), page.update()))
+        dd_ol_x = ft.Dropdown(options=[ft.dropdown.Option("Manual"), ft.dropdown.Option("VARIOS")], value="Manual",
+                              dense=True, text_size=13, width=150, label="Tipo de longitud")
+        txt_l_x = ft.TextField(value="100", dense=True, text_size=13, width=150, label="Longitud (mm)")
+
+        def al_cambiar_ol_x(ev):
+            txt_l_x.visible = (dd_ol_x.value != "VARIOS")
+            page.update()
+        dd_ol_x.on_select = al_cambiar_ol_x
+        dd_est_x = ft.Dropdown(options=[ft.dropdown.Option(x) for x in ["-", "NR", "R"]], value="NR",
+                               width=140, dense=True, text_size=13, label="Est. posterior")
+        dd_com_x = ft.Dropdown(options=[ft.dropdown.Option(x) for x in COMENTARIOS], value="CREAR OT",
+                               width=180, dense=True, text_size=13, label="Comentarios")
+        txt_desc_x = ft.TextField(label="Descripción adicional (ej.: ZONA POSTERIOR)", dense=True, text_size=13, width=300,
+                                  on_blur=lambda ev: (reconstruir_resumen_ots(), page.update()))
+        lbl_p = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
+        lbl_d = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
+        controles[f"def_{E}"] = dd_def_x
+        controles[f"opclong_{E}"] = dd_ol_x
+        controles[f"longval_{E}"] = txt_l_x
+        controles[f"est_{E}"] = dd_est_x
+        controles[f"com_{E}"] = dd_com_x
+        controles[f"desc_{E}"] = txt_desc_x
+        controles[f"img_pano_{E}"] = lbl_p
+        controles[f"img_det_{E}"] = lbl_d
+
+        card = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Text(f"➕ Defecto adicional #{info['n']} — {desc_z} ({cod_z})", weight="bold", size=13,
+                            color=ft.Colors.AMBER_300, expand=True),
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Quitar este defecto", icon_color=ft.Colors.RED_300,
+                                  on_click=lambda ev: quitar_extra(key_id, E)),
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row([dd_def_x, ft.Column([dd_ol_x, txt_l_x], spacing=4, width=150), dd_est_x, dd_com_x],
+                       wrap=True, spacing=8, run_spacing=8),
+                txt_desc_x,
+                ft.Row([
+                    ft.Column([boton_foto("Foto Panorámica", f"img_pano_{E}"), lbl_p], spacing=4),
+                    ft.Column([boton_foto("Foto de Detalle", f"img_det_{E}"), lbl_d], spacing=4),
+                ], wrap=True, spacing=20, run_spacing=10),
+            ], spacing=8),
+            padding=10, bgcolor=ft.Colors.with_opacity(1, "#161a24"), border_radius=8,
+            border=ft.Border.all(1, ft.Colors.AMBER_700), margin=ft.Margin(left=14, top=0, right=0, bottom=0),
+        )
+        info["cards"][E] = card
+        info["ids"].append(E)
+        info["cont"].controls.append(card)
+        reconstruir_resumen_ots()
+        page.update()
+
+    def pedir_extra(key_id, cod_z, desc_z):
+        def al_pulsar(ev):
+            if controles[f"def_{key_id}"].value == "LF" or controles[f"cond_{key_id}"].value != "RECHAZADO":
+                aviso("Primero marca el defecto", "Para agregar otro defecto, el punto debe tener ya un defecto seleccionado (condición RECHAZADO).")
+                return
+            agregar_extra(key_id, cod_z, desc_z)
+        return al_pulsar
+
     def reconstruir_resumen_ots():
         contenedor_resumen_ots.controls.clear()
         rechazos_actuales = []
@@ -1944,8 +2223,10 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 cod_z, desc_z, _ = it
                 k_id = f"z{idx_z}_{idx_i}"
                 val_def = controles[f"def_{k_id}"].value
-                if val_def != "LF":
-                    rechazos_actuales.append((cod_z, desc_z, val_def, k_id))
+                if val_def != "LF" and controles[f"cond_{k_id}"].value == "RECHAZADO":
+                    rechazos_actuales.append((cod_z, desc_z, val_def, k_id, (controles[f"desc_{k_id}"].value or "").strip()))
+                for E in extras_por_punto.get(k_id, {}).get("ids", []):
+                    rechazos_actuales.append((cod_z, desc_z, controles[f"def_{E}"].value, E, (controles[f"desc_{E}"].value or "").strip()))
 
         if not rechazos_actuales:
             contenedor_resumen_ots.controls.append(
@@ -1958,19 +2239,19 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             contenedor_resumen_ots.controls.append(
                 ft.Text("Resumen sugerido de Órdenes de Trabajo según los defectos reportados:", size=12, color=ft.Colors.GREY_400)
             )
-            for idx_ot, (cod_z, desc_z, val_def, k_id) in enumerate(rechazos_actuales):
+            for idx_ot, (cod_z, desc_z, val_def, k_id, extra_d) in enumerate(rechazos_actuales):
                 prefijo = "SOLD_CBO" if val_def == "DE" else "SOLD_REP"
                 sugerido = f"BK00{str(idx_ot + 1).zfill(5)}"
                 llave_bk = f"bk_{k_id}"
                 if llave_bk not in controles:
                     controles[llave_bk] = ft.TextField(
-                        label=f"Código Backlog SAP ({cod_z}):",
+                        label=f"Código Backlog SAP ({cod_z}{(' · ' + extra_d) if extra_d else ''}):",
                         value=sugerido, dense=True, width=220, text_size=13
                     )
                 contenedor_resumen_ots.controls.append(
                     ft.Column([
                         ft.Container(
-                            content=ft.Text(f"{prefijo} {desc_z} ({cod_z}) - {val_def}", font_family="Consolas", size=13, color=ft.Colors.BLUE_200),
+                            content=ft.Text(f"{prefijo} {desc_z} ({cod_z}){(' ' + extra_d.upper()) if extra_d else ''} - {val_def}", font_family="Consolas", size=13, color=ft.Colors.BLUE_200),
                             bgcolor=ft.Colors.BLUE_GREY_900, padding=10, border_radius=6
                         ),
                         controles[llave_bk]
@@ -2004,7 +2285,10 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             cod_z, desc_z, tec_def = item
             key_id = f"z{idx_z}_{idx_i}"
             
-            lbl_cond = ft.Text("ACEPTABLE", weight="bold", size=13, color=ft.Colors.GREEN_400)
+            lbl_cond = ft.Dropdown(
+                options=[ft.dropdown.Option(x) for x in CONDICIONES], value="ACEPTABLE",
+                width=150, dense=True, text_size=13, label="Condición", color=ft.Colors.GREEN_400,
+            )
             
             dd_opclong = ft.Dropdown(
                 options=[ft.dropdown.Option("Manual"), ft.dropdown.Option("VARIOS")],
@@ -2039,14 +2323,21 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 value="-", disabled=True, width=180, dense=True, text_size=13, label="Comentarios"
             )
 
+            dd_com.options = [ft.dropdown.Option(x) for x in COMENTARIOS]
             lbl_pano = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
             lbl_det = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
             controles[f"img_pano_{key_id}"] = lbl_pano
             controles[f"img_det_{key_id}"] = lbl_det
+            txt_desc_main = ft.TextField(
+                label="Descripción adicional (opcional, ej.: ZONA FRONTAL)", dense=True, text_size=13, width=300,
+                on_blur=lambda ev: (reconstruir_resumen_ots(), page.update()),
+            )
+            controles[f"desc_{key_id}"] = txt_desc_main
 
             contenedor_fotos_rechazo = ft.Container(
                 content=ft.Column([
                     ft.Text(f"📷 Fotos de Hallazgo: {desc_z} ({cod_z})", weight="bold", size=12, color=ft.Colors.AMBER_300),
+                    txt_desc_main,
                     ft.Row([
                         ft.Column([boton_foto("Foto Panorámica", f"img_pano_{key_id}"), lbl_pano], spacing=4),
                         ft.Column([boton_foto("Foto de Detalle", f"img_det_{key_id}"), lbl_det], spacing=4),
@@ -2055,10 +2346,11 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 padding=12, bgcolor=ft.Colors.with_opacity(1, "#161a24"), border_radius=8, visible=False
             )
 
-            def crear_evento_defecto(lbl_c, dd_ol, txt_l, dd_e, dd_cm, box_fotos):
+            def crear_evento_defecto(lbl_c, dd_ol, txt_l, dd_e, dd_cm, box_fotos, k_id):
                 def al_cambiar_def(e):
                     es_lf = (e.control.value == "LF")
                     if es_lf:
+                        limpiar_extras(k_id)
                         lbl_c.value = "ACEPTABLE"
                         lbl_c.color = ft.Colors.GREEN_400
                         dd_ol.visible = False
@@ -2091,8 +2383,23 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             dd_def = ft.Dropdown(
                 options=[ft.dropdown.Option(x) for x in perfil["defectos"]],
                 value="LF", width=130, dense=True, text_size=13, label="Defecto",
-                on_select=crear_evento_defecto(lbl_cond, dd_opclong, txt_long, dd_est, dd_com, contenedor_fotos_rechazo)
+                on_select=crear_evento_defecto(lbl_cond, dd_opclong, txt_long, dd_est, dd_com, contenedor_fotos_rechazo, key_id)
             )
+
+            def crear_evento_cond(lbl_c, txt_l, dd_e, dd_cm, box_fotos):
+                def al_cambiar_cond(e):
+                    v = lbl_c.value
+                    lbl_c.color = {"RECHAZADO": ft.Colors.RED_400, "ACEPTABLE": ft.Colors.GREEN_400}.get(v, ft.Colors.AMBER_400)
+                    if v in ("MN", "NI", "RECHAZADO"):
+                        txt_l.disabled = False
+                        dd_e.disabled = False
+                        dd_cm.disabled = False
+                    box_fotos.visible = (v == "RECHAZADO")
+                    reconstruir_resumen_ots()
+                    page.update()
+                return al_cambiar_cond
+            lbl_cond.on_select = crear_evento_cond(lbl_cond, txt_long, dd_est, dd_com, contenedor_fotos_rechazo)
+            controles[f"cond_{key_id}"] = lbl_cond
             
             controles[f"def_{key_id}"] = dd_def
             controles[f"opclong_{key_id}"] = dd_opclong
@@ -2106,16 +2413,19 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                     ft.Row([
                         ft.Text(cod_z, weight="bold", size=15, color=ft.Colors.BLUE_200),
                         ft.Text(desc_z, weight="bold", size=14, expand=True),
-                        lbl_cond,
+                        ft.IconButton(icon=ft.Icons.ADD_CIRCLE_OUTLINE, tooltip="Agregar otro defecto a este punto",
+                                      icon_color=ft.Colors.AMBER_400, on_click=pedir_extra(key_id, cod_z, desc_z)),
                     ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     ft.Text(f"Fecha de inspección: {hoy_str}", size=11, color=ft.Colors.GREY_400),
-                    ft.Row([dd_def, col_longitud, dd_est, dd_tec, dd_com], wrap=True, spacing=8, run_spacing=8),
+                    ft.Row([dd_def, lbl_cond, col_longitud, dd_est, dd_tec, dd_com], wrap=True, spacing=8, run_spacing=8),
                 ], spacing=6),
                 padding=10, bgcolor=ft.Colors.with_opacity(1, "#121722"), border_radius=8,
                 border=ft.Border.all(1, ft.Colors.BLUE_GREY_800),
             )
 
-            agregar(ft.Column([fila_datos, contenedor_fotos_rechazo], spacing=4))
+            cont_extras = ft.Column(spacing=6)
+            extras_por_punto[key_id] = {"cont": cont_extras, "ids": [], "n": 0, "cards": {}}
+            agregar(ft.Column([fila_datos, contenedor_fotos_rechazo, cont_extras], spacing=4))
             agregar(ft.Divider(height=4, color=ft.Colors.TRANSPARENT))
             
         # --- BLOQUES DE LETREROS OBLIGATORIOS (SOLO FOTO PANORÁMICA, FIEL AL ORIGINAL) ---
@@ -2209,6 +2519,22 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
     # SECCIÓN 6: GENERAR REPORTE FINAL
     # ==========================================================================
     texto_estado = ft.Text("", size=16, weight="bold")
+
+    def pedir_finalizar(e=None):
+        def confirmar(ev):
+            page.pop_dialog()
+            if volver is not None:
+                volver()
+        def cancelar(ev):
+            page.pop_dialog()
+        page.show_dialog(ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Finalizar inspección"),
+            content=ft.Text("Se cerrará este formulario y volverás al inicio para elegir otro equipo."),
+            actions=[ft.TextButton("Cancelar", on_click=cancelar), ft.FilledButton("Finalizar", on_click=confirmar)],
+        ))
+
+    btn_finalizar = ft.OutlinedButton("✅ FINALIZAR INSPECCIÓN", on_click=pedir_finalizar, visible=False, height=48, width=380)
     
     async def procesar_todo(e):
         ruta_plantilla = buscar_recurso(perfil["plantilla"])
@@ -2221,6 +2547,37 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             page.update()
             return
 
+        # --- datos obligatorios: sin ellos no se genera el archivo ---
+        cliente_chk = txt_cliente_manual.value if dd_cliente.value == "[Entrada Manual]" else dd_cliente.value
+        lugar_chk = txt_lugar_manual.value if dd_lugar.value == "[Entrada Manual]" else dd_lugar.value
+        faltantes = []
+        if not (cliente_chk or "").strip():
+            faltantes.append("Cliente")
+        if not (lugar_chk or "").strip():
+            faltantes.append("Lugar de inspección")
+        if not (txt_fecha_insp.value or "").strip():
+            faltantes.append("Fecha de inspección")
+        elif fecha_a_iso(txt_fecha_insp.value) is None:
+            faltantes.append("Fecha de inspección (formato DD/MM/AAAA)")
+        if not (dd_equipo.value or "").strip():
+            faltantes.append("Código de equipo (camión)")
+        if not (txt_sufijo.value or "").strip():
+            faltantes.append("Número de informe")
+        if faltantes:
+            texto_estado.value = "⚠️ Falta llenar: " + ", ".join(faltantes)
+            texto_estado.color = ft.Colors.AMBER_400
+            lista_txt = "\n".join("• " + f for f in faltantes)
+            dialogo_faltan = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Faltan datos"),
+                content=ft.Text("Para generar el Excel falta llenar:\n\n" + lista_txt),
+                actions=[ft.TextButton("Entendido", on_click=lambda ev: page.pop_dialog())],
+            )
+            page.show_dialog(dialogo_faltan)
+            page.update()
+            return
+
+        btn_finalizar.visible = False
         texto_estado.value = "⚙️ Generando el archivo Excel..."
         texto_estado.color = ft.Colors.BLUE_300
         page.update()
@@ -2230,25 +2587,40 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 estado_app[key] = control.value
                 
         todos_los_rechazos = []
+
+        def _long_estado(clave):
+            if estado_app.get(f"opclong_{clave}", "Manual") == "VARIOS":
+                return "VARIOS"
+            return estado_app.get(f"longval_{clave}", "100")
+
         for idx_z, zona in enumerate(ESTRUCTURA_ZONAS):
             for idx_i, item in enumerate(zona["items"]):
                 cod_z, desc_z, tec_def = item
                 key_id = f"z{idx_z}_{idx_i}"
                 def_val = estado_app.get(f"def_{key_id}", "LF")
-                if def_val != "LF":
-                    opc_l = estado_app.get(f"opclong_{key_id}", "Manual")
-                    long_final = "VARIOS" if opc_l == "VARIOS" else estado_app.get(f"longval_{key_id}", "100")
+                cond_val = estado_app.get(f"cond_{key_id}", "ACEPTABLE" if def_val == "LF" else "RECHAZADO")
+                if def_val != "LF" and cond_val == "RECHAZADO":
                     todos_los_rechazos.append({
-                        "zona": cod_z,
-                        "descripcion": desc_z,
-                        "defecto": def_val,
-                        "longitud": long_final,
+                        "zona": cod_z, "descripcion": desc_z, "defecto": def_val,
+                        "longitud": _long_estado(key_id),
                         "est_post": estado_app.get(f"est_{key_id}", "NR"),
                         "tecnica": estado_app.get(f"tec_{key_id}", tec_def),
                         "comentario": estado_app.get(f"com_{key_id}", "CREAR OT"),
-                        "key_id": key_id
+                        "key_id": key_id, "punto_id": key_id, "es_extra": False,
+                        "extra_desc": (estado_app.get(f"desc_{key_id}") or "").strip(),
                     })
-        
+                for E in extras_por_punto.get(key_id, {}).get("ids", []):
+                    todos_los_rechazos.append({
+                        "zona": cod_z, "descripcion": desc_z,
+                        "defecto": estado_app.get(f"def_{E}", "D"),
+                        "longitud": _long_estado(E),
+                        "est_post": estado_app.get(f"est_{E}", "NR"),
+                        "tecnica": estado_app.get(f"tec_{key_id}", tec_def),
+                        "comentario": estado_app.get(f"com_{E}", "CREAR OT"),
+                        "key_id": E, "punto_id": key_id, "es_extra": True,
+                        "extra_desc": (estado_app.get(f"desc_{E}") or "").strip(),
+                    })
+
         try:
             cliente_final = txt_cliente_manual.value if dd_cliente.value == "[Entrada Manual]" else dd_cliente.value
             lugar_final = txt_lugar_manual.value if dd_lugar.value == "[Entrada Manual]" else dd_lugar.value
@@ -2259,7 +2631,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             try:
                 horometro_val = float(txt_horometro.value.strip())
             except Exception:
-                horometro_val = txt_horometro.value.strip()
+                horometro_val = txt_horometro.value.strip() or "-"
 
             # Construir el DataFrame de espesores (7 filas x 7 columnas) si el PM corresponde
             df_matriz_final = None
@@ -2294,7 +2666,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 lugar=lugar_final,
                 fecha_insp=txt_fecha_insp.value.strip(),
                 cod_equipo=dd_equipo.value,
-                cod_tolva=txt_tolva.value.strip(),
+                cod_tolva=txt_tolva.value.strip() or "-",
                 horometro=horometro_val,
                 cod_informe=cod_inf_final,
                 revision=txt_revision.value.strip(),
@@ -2309,8 +2681,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 )
             )
             
-            fecha_limpia = txt_fecha_insp.value.strip().replace("/", "")
-            nombre_salida = f"{cod_inf_final}_{fecha_limpia}.xlsx"
+            nombre_salida = f"{cod_inf_final} {fecha_a_iso(txt_fecha_insp.value)}.xlsx"
             texto_estado.value = "💾 Elige dónde guardar el Excel..."
             page.update()
             ruta_guardada = await selector_fotos.save_file(
@@ -2336,6 +2707,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 msg += "\n" + "\n".join(avisos)
             texto_estado.value = msg
             texto_estado.color = ft.Colors.GREEN_400
+            btn_finalizar.visible = True
         except Exception as ex:
             texto_estado.value = f"❌ Error al generar el reporte: {ex}"
             texto_estado.color = ft.Colors.RED_400
@@ -2346,7 +2718,8 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         ft.Container(
             content=ft.Column([
                 ft.Button("📥 GENERAR REPORTE EXCEL", on_click=procesar_todo, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, height=55, width=380),
-                texto_estado
+                texto_estado,
+                btn_finalizar,
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             alignment=ft.Alignment(0, 0),
             margin=ft.Margin(left=0, top=15, right=0, bottom=50)
