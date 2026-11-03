@@ -2777,7 +2777,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                     left=8, right=8, top=4,
                 ),
                 ft.Container(
-                    content=ft.Text("Pellizca para acercar · arrastra para mover", size=12, color=ft.Colors.WHITE70),
+                    content=ft.Text("Pellizca para acercar · arrastra para mover", size=12, color=ft.Colors.WHITE_70),
                     left=12, bottom=8,
                 ),
             ], expand=True)),
