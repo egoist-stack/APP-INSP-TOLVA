@@ -355,6 +355,7 @@ PERFIL_TOLVA_CAT = {
     "leyenda_defectos": "Leyenda Defectos: D: Desprendimiento | DE: Desgaste | DP: Desprendimiento Parcial | F: Fisurado | LF: Libre de fisura (Aceptable)",
     "items_extra": {1: 2, 3: 1},
     "hoja2_desde_openpyxl": False,
+    "quitar_hojas_extra": False,
     "limpiar_fuera_de_area": False,
     "factor_pagina": 1.0,
     "desplazar_alturas": True,
@@ -383,6 +384,7 @@ PERFIL_TOLVA_DT = {
     "leyenda_defectos": "Leyenda Defectos: D: Desprendimiento | DE: Desgaste | DP: Desprendimiento Parcial | F: Fisurado | FN: Fisura nueva | LF: Libre de fisura (Aceptable)",
     "items_extra": {1: 2, 3: 1},
     "hoja2_desde_openpyxl": True,
+    "quitar_hojas_extra": True,
     "limpiar_fuera_de_area": True,
     "factor_pagina": 0.94,
     "desplazar_alturas": True,
@@ -1108,6 +1110,11 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     fila_final_nueva = fila_final_original + desplazamiento
     ws.print_area = f"A1:R{fila_final_nueva}"
 
+    if perfil.get("quitar_hojas_extra"):
+        for nombre_hoja in list(wb.sheetnames):
+            if nombre_hoja != perfil["hoja"]:
+                del wb[nombre_hoja]
+
     buf_temp = io.BytesIO()
     wb.save(buf_temp)
     buf_temp.seek(0)
@@ -1293,10 +1300,67 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     partes_nuevas['xl/drawings/drawing1.xml'] = drawing1_xml.encode('utf-8')
     partes_nuevas['xl/drawings/_rels/drawing1.xml.rels'] = drawing1_rels.encode('utf-8')
 
+    partes_a_quitar = set()
+    if perfil.get("quitar_hojas_extra"):
+        import posixpath
+        wb_orig = z_original.read('xl/workbook.xml').decode('utf-8')
+        rels_wb = z_original.read('xl/_rels/workbook.xml.rels').decode('utf-8')
+        destino_de = {}
+        for m_r in re.finditer(r'<Relationship\s[^>]*/>', rels_wb):
+            t_r = m_r.group(0)
+            id_r = re.search(r'Id="([^"]+)"', t_r)
+            tg_r = re.search(r'Target="([^"]+)"', t_r)
+            if id_r and tg_r:
+                destino_de[id_r.group(1)] = tg_r.group(1)
+        hojas_quitar = []
+        for m_s in re.finditer(r'<sheet\s[^>]*/>', wb_orig):
+            t_s = m_s.group(0)
+            nom_s = re.search(r'name="([^"]*)"', t_s)
+            rid_s = re.search(r'r:id="([^"]+)"', t_s)
+            if nom_s and rid_s and nom_s.group(1) != perfil["hoja"] and rid_s.group(1) in destino_de:
+                hojas_quitar.append(destino_de[rid_s.group(1)])
+        candidatas = set()
+        for destino in hojas_quitar:
+            ruta_hoja = posixpath.normpath(posixpath.join('xl', destino))
+            candidatas.add(ruta_hoja)
+            ruta_rels_hoja = posixpath.join(posixpath.dirname(ruta_hoja), '_rels', posixpath.basename(ruta_hoja) + '.rels')
+            if ruta_rels_hoja in z_original.namelist():
+                candidatas.add(ruta_rels_hoja)
+                for t_x in re.findall(r'Target="([^"]+)"', z_original.read(ruta_rels_hoja).decode('utf-8', 'ignore')):
+                    if t_x.startswith('http'):
+                        continue
+                    ruta_x = posixpath.normpath(posixpath.join(posixpath.dirname(ruta_hoja), t_x))
+                    candidatas.add(ruta_x)
+                    ruta_rels_x = posixpath.join(posixpath.dirname(ruta_x), '_rels', posixpath.basename(ruta_x) + '.rels')
+                    if ruta_rels_x in z_original.namelist():
+                        candidatas.add(ruta_rels_x)
+        # no quitar nada que otra parte que se queda siga usando
+        referenciadas = set()
+        for item in z_original.infolist():
+            if item.filename.endswith('.rels') and item.filename not in candidatas and item.filename != 'xl/_rels/workbook.xml.rels':
+                base_rel = posixpath.dirname(posixpath.dirname(item.filename))
+                for t_x in re.findall(r'Target="([^"]+)"', z_original.read(item.filename).decode('utf-8', 'ignore')):
+                    if not t_x.startswith('http'):
+                        referenciadas.add(posixpath.normpath(posixpath.join(base_rel, t_x)))
+        partes_a_quitar = {c for c in candidatas if c not in referenciadas and not c.startswith('xl/media/')}
+        # limpiar referencias en workbook.xml.rels y [Content_Types].xml
+        txt_rels_wb = partes_nuevas.get('xl/_rels/workbook.xml.rels')
+        txt_rels_wb = txt_rels_wb.decode('utf-8') if txt_rels_wb else rels_wb
+        for destino in hojas_quitar:
+            txt_rels_wb = re.sub(r'<Relationship\s[^>]*Target="%s"[^>]*/>' % re.escape(destino), '', txt_rels_wb)
+        partes_nuevas['xl/_rels/workbook.xml.rels'] = txt_rels_wb.encode('utf-8')
+        txt_ct = partes_nuevas.get('[Content_Types].xml')
+        txt_ct = txt_ct.decode('utf-8') if txt_ct else z_original.read('[Content_Types].xml').decode('utf-8')
+        for parte in partes_a_quitar:
+            txt_ct = re.sub(r'<Override\s[^>]*PartName="/%s"[^>]*/>' % re.escape(parte), '', txt_ct)
+        partes_nuevas['[Content_Types].xml'] = txt_ct.encode('utf-8')
+
     medios_en_uso = None
-    if perfil.get("limpiar_fuera_de_area"):
+    if perfil.get("limpiar_fuera_de_area") or partes_a_quitar:
         medios_en_uso = set()
         for item in z_original.infolist():
+            if item.filename in partes_a_quitar:
+                continue
             if item.filename.endswith('.rels'):
                 txt_rels = partes_nuevas.get(item.filename)
                 txt_rels = txt_rels.decode('utf-8') if txt_rels else z_original.read(item.filename).decode('utf-8', 'ignore')
@@ -1306,7 +1370,8 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     # calcChain.xml no se copia: se quita también su referencia para que Excel no pida reparar el archivo
     for nombre_ref in ('xl/_rels/workbook.xml.rels', '[Content_Types].xml'):
         if nombre_ref in z_original.namelist():
-            txt_ref = z_original.read(nombre_ref).decode('utf-8')
+            previo_ref = partes_nuevas.get(nombre_ref)
+            txt_ref = previo_ref.decode('utf-8') if previo_ref else z_original.read(nombre_ref).decode('utf-8')
             txt_ref = re.sub(r'<Relationship\s[^>]*calcChain[^>]*/>', '', txt_ref)
             txt_ref = re.sub(r'<Override\s[^>]*calcChain[^>]*/>', '', txt_ref)
             partes_nuevas[nombre_ref] = txt_ref.encode('utf-8')
@@ -1314,7 +1379,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     buf_final = io.BytesIO()
     with zipfile.ZipFile(buf_final, 'w', zipfile.ZIP_DEFLATED) as z_final:
         for item in z_original.infolist():
-            if item.filename == 'xl/calcChain.xml':
+            if item.filename == 'xl/calcChain.xml' or item.filename in partes_a_quitar:
                 continue
             if medios_en_uso is not None and item.filename.startswith('xl/media/') and item.filename.split('/')[-1] not in medios_en_uso:
                 continue
