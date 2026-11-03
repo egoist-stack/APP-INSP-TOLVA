@@ -6,6 +6,8 @@ from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.worksheet.properties import PageSetupProperties
 import os
 import io
+import shutil
+from types import SimpleNamespace
 from copy import copy
 import asyncio
 import time
@@ -406,6 +408,64 @@ PERFILES = {
     ("TOLVAS", "DT"): PERFIL_TOLVA_DT,
 }
 
+def _dir_borradores():
+    return os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or ".", "borradores")
+
+def listar_borradores():
+    base = _dir_borradores()
+    salida = []
+    if os.path.isdir(base):
+        for nombre in os.listdir(base):
+            ruta_json = os.path.join(base, nombre, "borrador.json")
+            if nombre.endswith(".tmp") or not os.path.exists(ruta_json):
+                continue
+            try:
+                with open(ruta_json, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                salida.append({"id": d.get("id", nombre), "nombre": d.get("nombre", nombre),
+                               "guardado": d.get("guardado", ""), "perfil": d.get("perfil")})
+            except Exception:
+                continue
+    salida.sort(key=lambda x: x["guardado"], reverse=True)
+    return salida
+
+def guardar_borrador_disco(id_borrador, datos, fotos):
+    """Guarda el borrador y COPIA sus fotos a la carpeta de datos de la app (no se pierden al cerrarla)."""
+    base = _dir_borradores()
+    os.makedirs(base, exist_ok=True)
+    id_b = id_borrador or datetime.now().strftime("%Y%m%d_%H%M%S")
+    destino = os.path.join(base, id_b)
+    tmp = destino + ".tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(os.path.join(tmp, "fotos"))
+    rel = {}
+    for k, ruta in fotos.items():
+        if ruta and os.path.exists(ruta):
+            ext = os.path.splitext(ruta)[1] or ".jpg"
+            nombre_f = re.sub(r"[^A-Za-z0-9_.-]", "_", k) + ext
+            shutil.copy2(ruta, os.path.join(tmp, "fotos", nombre_f))
+            rel[k] = "fotos/" + nombre_f
+    datos = dict(datos)
+    datos["fotos"] = rel
+    datos["id"] = id_b
+    datos["guardado"] = datetime.now().isoformat(timespec="seconds")
+    datos["version"] = 1
+    with open(os.path.join(tmp, "borrador.json"), "w", encoding="utf-8") as f:
+        json.dump(datos, f, ensure_ascii=False)
+    shutil.rmtree(destino, ignore_errors=True)
+    os.replace(tmp, destino)
+    return id_b
+
+def cargar_borrador(id_b):
+    base = os.path.join(_dir_borradores(), id_b)
+    with open(os.path.join(base, "borrador.json"), "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    datos["fotos"] = {k: os.path.join(base, rel) for k, rel in datos.get("fotos", {}).items()}
+    return datos
+
+def eliminar_borrador(id_b):
+    shutil.rmtree(os.path.join(_dir_borradores(), id_b), ignore_errors=True)
+
 def es_pm_espesores(pm_str):
     if not pm_str:
         return False
@@ -506,6 +566,48 @@ def _podar_rels_sin_uso(xml_dibujo, rels_texto):
             return ""
         return rel
     return re.sub(r'<Relationship\s[^>]*/>', revisar, rels_texto)
+
+def _es_codigo_item(valor):
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        return True
+    return bool(re.match(r"^\d+(\.\d+)?$", str(valor or "").strip()))
+
+def _contar_filas_item(ws, fila_inicio):
+    """Cuántas filas de puntos de inspección tiene realmente la tabla de la plantilla (empiezan en fila_inicio)."""
+    n = 0
+    fila = fila_inicio
+    while fila <= ws.max_row and _es_codigo_item(ws.cell(row=fila, column=1).value):
+        n += 1
+        fila += 1
+    return n
+
+def _detectar_cierre(ws, fila_desde, cierre_perfil):
+    """Ubica por sus rótulos las filas de OT, nombre, firma y fecha; si algo falla usa los valores del perfil."""
+    titulo = realizado = nombre = firma = fecha = None
+    for r in range(fila_desde, ws.max_row + 1):
+        t = _sin_tildes(ws.cell(row=r, column=1).value)
+        if titulo is None:
+            if t.startswith("CONCLUSIONES") or t.startswith("ZONAS A REPARAR"):
+                titulo = r
+        elif realizado is None:
+            if t.startswith("REALIZADO"):
+                realizado = r
+        elif nombre is None:
+            if t.startswith("NOMBRE"):
+                nombre = r
+        elif firma is None:
+            if t.startswith("FIRMA"):
+                firma = r
+        elif fecha is None:
+            if t.startswith("FECHA"):
+                fecha = r
+                break
+    if None in (titulo, realizado, nombre, firma, fecha):
+        return cierre_perfil
+    cierre = dict(cierre_perfil)
+    cierre.update({"fila_ot": titulo + 1, "fila_ot_max": realizado - 1, "fila_nombre": nombre,
+                   "fila_firma": firma, "fila_fecha": fecha, "fila_final": fecha})
+    return cierre
 
 def _detectar_headers_zonas(ws):
     filas = []
@@ -835,6 +937,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     fotos_pendientes = []
 
     filas_headers_zonas = _detectar_headers_zonas(ws)
+    cierre = _detectar_cierre(ws, filas_headers_zonas[-1], perfil["cierre"])
     ws.row_breaks.brk = []
 
     presupuesto_pagina_pt = _calcular_presupuesto_pagina_pt(ws) * perfil.get("factor_pagina", 1.0)
@@ -849,9 +952,11 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         num_items = len(bloque_zona["items"])
 
         # puntos de inspección que la plantilla todavía no tiene: se agregan filas al final de la tabla
-        n_extra = perfil.get("items_extra", {}).get(idx_z, 0)
+        n_plantilla = _contar_filas_item(ws, fila_inicio_items)
+        n_extra = max(0, num_items - n_plantilla)
+        filas_tabla = n_plantilla + n_extra
         if n_extra:
-            fila_ref = fila_inicio_items + (num_items - n_extra) - 1      # última fila de ítem de la plantilla
+            fila_ref = fila_inicio_items + n_plantilla - 1      # última fila de ítem de la plantilla
             fila_ins = fila_ref + 1                                        # fila de leyenda actual
             merges_ref = [(m.min_col, m.max_col) for m in ws.merged_cells.ranges
                           if m.min_row == fila_ref and m.max_row == fila_ref]
@@ -879,7 +984,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             fila_proteccion_inicio = fila_legend_zona_anterior + 1
         else:
             fila_proteccion_inicio = fila_header - 2
-        fila_legend_zona = fila_header + 2 + num_items
+        fila_legend_zona = fila_header + 2 + filas_tabla
         altura_tabla_zona_pt = _altura_filas_pt(ws, fila_proteccion_inicio, fila_legend_zona)
 
         altura_pagina_actual_pt += _altura_filas_pt(ws, fila_medida_hasta + 1, fila_proteccion_inicio - 1)
@@ -974,7 +1079,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             ]
 
         if rechazos_zona or bloques_obligatorios:
-            fila_legend = fila_header + 2 + num_items
+            fila_legend = fila_header + 2 + filas_tabla
             punto_insercion = fila_legend + 1
 
             altura_pagina_actual_pt += _altura_filas_pt(ws, fila_medida_hasta + 1, punto_insercion - 1)
@@ -1424,7 +1529,7 @@ def fecha_a_iso(texto):
     except Exception:
         return None
 
-def construir_formulario(page: ft.Page, perfil, volver=None):
+def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
     ESTRUCTURA_ZONAS = perfil["estructura"]
     estado_app.clear()
     rutas_fotos.clear()
@@ -2225,8 +2330,10 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         ], spacing=4)
 
     # --- TÍTULO E INFO ---
+    barra_sup = [ft.FilledButton("💾 Guardar borrador", on_click=lambda e: guardar_borrador_ui())]
     if volver is not None:
-        agregar(ft.TextButton("← Cambiar de equipo", on_click=lambda e: volver()))
+        barra_sup.insert(0, ft.TextButton("← Menú", on_click=lambda e: pedir_salir()))
+    agregar(ft.Row(barra_sup, wrap=True, spacing=8, run_spacing=4))
     agregar(
         ft.Text(perfil["titulo_form"], size=22, weight="bold", color=ft.Colors.BLUE_200),
         ft.Container(
@@ -2473,10 +2580,14 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             reconstruir_resumen_ots()
             page.update()
 
-    def agregar_extra(key_id, cod_z, desc_z):
+    def agregar_extra(key_id, cod_z, desc_z, E_forzado=None):
         info = extras_por_punto[key_id]
-        info["n"] += 1
-        E = f"{key_id}_x{info['n']}"
+        if E_forzado:
+            info["n"] = max(info["n"], int(E_forzado.rsplit("_x", 1)[1]))
+            E = E_forzado
+        else:
+            info["n"] += 1
+            E = f"{key_id}_x{info['n']}"
         defectos_x = [d for d in perfil["defectos"] if d != "LF"]
 
         dd_def_x = ft.Dropdown(options=[ft.dropdown.Option(x) for x in defectos_x], value=defectos_x[0],
@@ -2510,7 +2621,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         card = ft.Container(
             content=ft.Column([
                 ft.Row([
-                    ft.Text(f"➕ Defecto adicional #{info['n']} — {desc_z} ({cod_z})", weight="bold", size=13,
+                    ft.Text(f"➕ Defecto adicional #{E.rsplit('_x', 1)[1]} — {desc_z} ({cod_z})", weight="bold", size=13,
                             color=ft.Colors.AMBER_300, expand=True),
                     ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Quitar este defecto", icon_color=ft.Colors.RED_300,
                                   on_click=lambda ev: quitar_extra(key_id, E)),
@@ -2860,6 +2971,65 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         ))
 
     btn_finalizar = ft.OutlinedButton("✅ FINALIZAR INSPECCIÓN", on_click=pedir_finalizar, visible=False, height=48, width=380)
+
+    ultimo_excel = {"bytes": None, "nombre": None}
+    try:
+        compartidor = ft.Share()
+        try:
+            page.services.append(compartidor)
+        except Exception:
+            page.overlay.append(compartidor)
+    except Exception:
+        compartidor = None
+
+    async def compartir_excel(e=None):
+        if not ultimo_excel["bytes"]:
+            aviso("Compartir", "Primero genera el reporte Excel.")
+            return
+        if compartidor is None:
+            aviso("Compartir no disponible", "Esta versión no permite compartir. Usa «Guardar en el teléfono».")
+            return
+        try:
+            try:
+                carpeta = os.environ.get("FLET_APP_STORAGE_TEMP") or tempfile.gettempdir()
+                os.makedirs(carpeta, exist_ok=True)
+                ruta_tmp = os.path.join(carpeta, ultimo_excel["nombre"])
+                with open(ruta_tmp, "wb") as f_tmp:
+                    f_tmp.write(ultimo_excel["bytes"])
+                archivo = ft.ShareFile.from_path(ruta_tmp)
+            except Exception:
+                archivo = ft.ShareFile.from_bytes(
+                    ultimo_excel["bytes"],
+                    mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    name=ultimo_excel["nombre"],
+                )
+            await compartidor.share_files([archivo], text=ultimo_excel["nombre"], title="Compartir reporte")
+        except Exception as ex:
+            aviso("No se pudo compartir", f"{ex}\n\nPuedes usar «Guardar en el teléfono».")
+
+    async def guardar_excel_local(e=None):
+        if not ultimo_excel["bytes"]:
+            aviso("Guardar", "Primero genera el reporte Excel.")
+            return
+        try:
+            ruta_guardada = await selector_fotos.save_file(
+                dialog_title="Guardar reporte Excel",
+                file_name=ultimo_excel["nombre"],
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["xlsx"],
+                src_bytes=ultimo_excel["bytes"],
+            )
+            if not page.web and not es_movil():
+                ruta_guardada = ruta_guardada or ultimo_excel["nombre"]
+                with open(ruta_guardada, "wb") as f_out:
+                    f_out.write(ultimo_excel["bytes"])
+            if ruta_guardada or page.web:
+                aviso("Guardado", f"Archivo guardado: {ruta_guardada or ultimo_excel['nombre']}")
+        except Exception as ex:
+            aviso("No se pudo guardar", str(ex))
+
+    btn_compartir = ft.FilledButton("📤 COMPARTIR EXCEL (Drive, WhatsApp…)", on_click=compartir_excel, visible=False, height=52, width=380)
+    btn_guardar_excel = ft.OutlinedButton("💾 Guardar en el teléfono", on_click=guardar_excel_local, visible=False, height=46, width=380)
     
     async def procesar_todo(e):
         ruta_plantilla = buscar_recurso(perfil["plantilla"])
@@ -2903,6 +3073,8 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             return
 
         btn_finalizar.visible = False
+        btn_compartir.visible = False
+        btn_guardar_excel.visible = False
         texto_estado.value = "⚙️ Generando el archivo Excel..."
         texto_estado.color = ft.Colors.BLUE_300
         page.update()
@@ -3007,31 +3179,16 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             )
             
             nombre_salida = f"{cod_inf_final} {fecha_a_iso(txt_fecha_insp.value)}.xlsx"
-            texto_estado.value = "💾 Elige dónde guardar el Excel..."
-            page.update()
-            ruta_guardada = await selector_fotos.save_file(
-                dialog_title="Guardar reporte Excel",
-                file_name=nombre_salida,
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=["xlsx"],
-                src_bytes=excel_bytes,
-            )
-            if not page.web and not es_movil():
-                # En PC el selector solo devuelve la ruta: escribimos el archivo nosotros.
-                ruta_guardada = ruta_guardada or nombre_salida
-                with open(ruta_guardada, "wb") as f:
-                    f.write(excel_bytes)
-            if not ruta_guardada and not page.web:
-                texto_estado.value = "⚠️ Guardado cancelado. Vuelve a pulsar el botón para elegir dónde guardarlo."
-                texto_estado.color = ft.Colors.AMBER_400
-                page.update()
-                return
+            ultimo_excel["bytes"] = excel_bytes
+            ultimo_excel["nombre"] = nombre_salida
 
-            msg = f"✅ Reporte Excel generado correctamente: {ruta_guardada or nombre_salida}"
+            msg = f"✅ Reporte Excel generado: {nombre_salida}\nCompártelo (Drive, WhatsApp, correo…) o guárdalo en el teléfono."
             if avisos:
                 msg += "\n" + "\n".join(avisos)
             texto_estado.value = msg
             texto_estado.color = ft.Colors.GREEN_400
+            btn_compartir.visible = True
+            btn_guardar_excel.visible = True
             btn_finalizar.visible = True
         except Exception as ex:
             texto_estado.value = f"❌ Error al generar el reporte: {ex}"
@@ -3044,15 +3201,224 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             content=ft.Column([
                 ft.Button("📥 GENERAR REPORTE EXCEL", on_click=procesar_todo, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, height=55, width=380),
                 texto_estado,
+                btn_compartir,
+                btn_guardar_excel,
                 btn_finalizar,
+                ft.OutlinedButton("💾 GUARDAR BORRADOR", on_click=lambda e: guardar_borrador_ui(), height=48, width=380),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             alignment=ft.Alignment(0, 0),
             margin=ft.Margin(left=0, top=15, right=0, bottom=50)
         )
     )
 
+    # ======================= BORRADORES =======================
+    borrador_id = {"v": (borrador or {}).get("id")}
+    puntos_info = {}
+    for idx_z, bz in enumerate(ESTRUCTURA_ZONAS):
+        for idx_i, it in enumerate(bz["items"]):
+            puntos_info[f"z{idx_z}_{idx_i}"] = (it[0], it[1])
+    PREFIJOS_PUNTO = ("def_", "opclong_", "longval_", "est_", "tec_", "com_", "cond_", "desc_", "bk_")
+    campos_gen = {
+        "dd_cliente": dd_cliente, "txt_cliente_manual": txt_cliente_manual, "dd_lugar": dd_lugar,
+        "txt_lugar_manual": txt_lugar_manual, "txt_fecha_insp": txt_fecha_insp, "dd_equipo": dd_equipo,
+        "txt_tolva": txt_tolva, "txt_horometro": txt_horometro, "txt_sufijo": txt_sufijo,
+        "txt_revision": txt_revision, "dd_pm": dd_pm, "txt_pm_manual": txt_pm_manual,
+        "dd_nombre_firma": dd_nombre_firma, "txt_nombre_firma_manual": txt_nombre_firma_manual,
+        "txt_fecha_firma": txt_fecha_firma, "chk_no_medicion": chk_no_medicion,
+    }
+
+    def recolectar_estado():
+        return {
+            "perfil": next((list(k) for k, v in PERFILES.items() if v is perfil), None),
+            "nombre": f"{perfil['nombre']} · {dd_equipo.value} · {txt_fecha_insp.value}",
+            "generales": {k: c.value for k, c in campos_gen.items()},
+            "matriz": [[celdas_matriz[i][j].value for j in range(7)] for i in range(7)],
+            "puntos": {k: c.value for k, c in controles.items()
+                       if k.startswith(PREFIJOS_PUNTO) and isinstance(c, (ft.Dropdown, ft.TextField))},
+            "extras": {k: {"n": v["n"], "ids": list(v["ids"])} for k, v in extras_por_punto.items() if v["ids"]},
+        }
+
+    def guardar_borrador_ui(salir=False):
+        try:
+            datos = recolectar_estado()
+            borrador_id["v"] = guardar_borrador_disco(borrador_id["v"], datos, dict(rutas_fotos))
+        except Exception as ex:
+            aviso("No se pudo guardar el borrador", str(ex))
+            return
+        if salir and volver is not None:
+            volver()
+        else:
+            aviso("Borrador guardado", f"{datos['nombre']}\n\nLo encuentras en el menú principal, en «Borradores».")
+
+    def pedir_salir(e=None):
+        def guardar_y_salir(ev):
+            page.pop_dialog()
+            guardar_borrador_ui(salir=True)
+        def salir_sin_guardar(ev):
+            page.pop_dialog()
+            if volver is not None:
+                volver()
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text("¿Salir del formulario?"),
+            content=ft.Text("Puedes guardar un borrador para retomar esta inspección después."),
+            actions=[ft.TextButton("Cancelar", on_click=lambda ev: page.pop_dialog()),
+                     ft.TextButton("Salir sin guardar", on_click=salir_sin_guardar),
+                     ft.FilledButton("Guardar y salir", on_click=guardar_y_salir)],
+        ))
+
+    def restaurar_borrador(b):
+        for nombre_c, valor in b.get("generales", {}).items():
+            ctl = campos_gen.get(nombre_c)
+            if ctl is not None and valor is not None:
+                ctl.value = valor
+        txt_cliente_manual.visible = (dd_cliente.value == "[Entrada Manual]")
+        txt_lugar_manual.visible = (dd_lugar.value == "[Entrada Manual]")
+        txt_nombre_firma_manual.visible = (dd_nombre_firma.value == "[Entrada Manual]")
+        actualizar_codigo_informe()
+        evaluar_visibilidad_matriz()
+        al_cambiar_no_medicion(None)
+        for i, fila_m in enumerate(b.get("matriz", [])[:7]):
+            for j, v in enumerate(fila_m[:7]):
+                celdas_matriz[i][j].value = v
+
+        puntos = b.get("puntos", {})
+        for K in puntos_info:
+            ctl_def = controles[f"def_{K}"]
+            v = puntos.get(f"def_{K}")
+            if v is not None:
+                ctl_def.value = v
+                if getattr(ctl_def, "on_select", None):
+                    ctl_def.on_select(SimpleNamespace(control=ctl_def))
+            for pref in ("tec_", "opclong_", "longval_", "est_", "com_", "cond_", "desc_"):
+                kk = pref + K
+                if kk in puntos and kk in controles:
+                    controles[kk].value = puntos[kk]
+            if ctl_def.value != "LF":
+                ol = controles.get(f"opclong_{K}")
+                if ol is not None and getattr(ol, "on_select", None):
+                    ol.on_select(SimpleNamespace(control=ol))
+            cd = controles.get(f"cond_{K}")
+            if cd is not None and getattr(cd, "on_select", None):
+                cd.on_select(SimpleNamespace(control=cd))
+
+        for K, info in b.get("extras", {}).items():
+            if K not in extras_por_punto:
+                continue
+            cod_z, desc_z = puntos_info[K]
+            for E in info.get("ids", []):
+                agregar_extra(K, cod_z, desc_z, E_forzado=E)
+                for pref in ("def_", "opclong_", "longval_", "est_", "com_", "desc_"):
+                    kk = pref + E
+                    if kk in puntos and kk in controles:
+                        controles[kk].value = puntos[kk]
+                ol = controles.get(f"opclong_{E}")
+                if ol is not None and getattr(ol, "on_select", None):
+                    ol.on_select(SimpleNamespace(control=ol))
+            extras_por_punto[K]["n"] = max(extras_por_punto[K]["n"], info.get("n", 0))
+
+        reconstruir_resumen_ots()
+        for kk, v in puntos.items():
+            if kk.startswith("bk_") and kk in controles and v is not None:
+                controles[kk].value = v
+
+        for k, ruta in b.get("fotos", {}).items():
+            if os.path.exists(ruta):
+                rutas_fotos[k] = ruta
+                ctl = controles.get(k)
+                if ctl is not None:
+                    ctl.value = "✅ " + os.path.basename(ruta)
+                    ctl.color = ft.Colors.GREEN_400
+
     page.add(lista_pantalla)
     page.update()
+    if borrador:
+        try:
+            restaurar_borrador(borrador)
+        except Exception as ex_r:
+            aviso("Borrador", f"No se pudo restaurar todo el borrador: {ex_r}")
+        page.update()
+
+
+def mostrar_borradores(page: ft.Page):
+    """Lista de borradores guardados: continuar o eliminar."""
+    for lista in (page.services, page.overlay):
+        try:
+            lista.clear()
+        except Exception:
+            pass
+    page.controls.clear()
+    page.title = "INSPKTOR"
+    page.scroll = "adaptive"
+    page.padding = 12
+    page.theme_mode = ft.ThemeMode.DARK
+    page.bgcolor = ft.Colors.with_opacity(1, "#0e1117")
+    cont = ft.Column(spacing=10)
+
+    def aviso_b(titulo, texto):
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text(titulo), content=ft.Text(texto),
+            actions=[ft.TextButton("Entendido", on_click=lambda ev: page.pop_dialog())],
+        ))
+
+    def abrir(b):
+        try:
+            datos = cargar_borrador(b["id"])
+            clave = tuple(datos.get("perfil") or ())
+            perfil_b = PERFILES.get(clave)
+            if perfil_b is None:
+                aviso_b("No se puede abrir", "Este borrador es de un equipo que ya no está disponible.")
+                return
+            page.controls.clear()
+            construir_formulario(page, perfil_b, volver=lambda: mostrar_selector(page), borrador=datos)
+        except Exception as ex:
+            aviso_b("No se pudo abrir el borrador", str(ex))
+
+    def pedir_eliminar(b):
+        def confirmar(ev):
+            page.pop_dialog()
+            eliminar_borrador(b["id"])
+            refrescar()
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text("Eliminar borrador"),
+            content=ft.Text(f"¿Eliminar «{b['nombre']}» y sus fotos? No se puede deshacer."),
+            actions=[ft.TextButton("Cancelar", on_click=lambda ev: page.pop_dialog()),
+                     ft.FilledButton("Eliminar", on_click=confirmar)],
+        ))
+
+    def tarjeta(b):
+        try:
+            fecha_txt = datetime.fromisoformat(b["guardado"]).strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            fecha_txt = b.get("guardado", "")
+        return ft.Container(
+            content=ft.Column([
+                ft.Text(b["nombre"], weight="bold", size=15),
+                ft.Text(f"Guardado: {fecha_txt}", size=12, color=ft.Colors.GREY_400),
+                ft.Row([
+                    ft.FilledButton("Continuar", on_click=lambda ev, b=b: abrir(b)),
+                    ft.OutlinedButton("Eliminar", on_click=lambda ev, b=b: pedir_eliminar(b)),
+                ], spacing=8),
+            ], spacing=6),
+            padding=14, bgcolor=ft.Colors.with_opacity(1, "#121722"), border_radius=10,
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_800),
+        )
+
+    def refrescar():
+        cont.controls.clear()
+        lista_b = listar_borradores()
+        if not lista_b:
+            cont.controls.append(ft.Text("No hay borradores guardados.", color=ft.Colors.GREY_400))
+        for b in lista_b:
+            cont.controls.append(tarjeta(b))
+        page.update()
+
+    page.add(
+        ft.TextButton("← Volver", on_click=lambda e: mostrar_selector(page)),
+        ft.Text("📂 Borradores", size=24, weight="bold", color=ft.Colors.BLUE_200),
+        ft.Text("Inspecciones guardadas a medias. Elige una para retomarla donde la dejaste.", size=13, color=ft.Colors.GREY_400),
+        cont,
+    )
+    refrescar()
 
 
 def mostrar_selector(page: ft.Page):
@@ -3115,6 +3481,8 @@ def mostrar_selector(page: ft.Page):
         ft.Text("INSPKTOR", size=34, weight="bold", color=ft.Colors.BLUE_200, text_align="center"),
         ft.Text("Inspección de equipos", size=14, color=ft.Colors.GREY_400, text_align="center"),
     ]
+    n_borr = len(listar_borradores())
+    btn_borr = ft.OutlinedButton(f"📂 Borradores ({n_borr})", on_click=lambda e: mostrar_borradores(page), height=46, width=260)
     page.add(
         ft.Column(cabecera, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
         ft.Divider(height=18, color=ft.Colors.TRANSPARENT),
@@ -3127,6 +3495,7 @@ def mostrar_selector(page: ft.Page):
             padding=18, bgcolor=ft.Colors.with_opacity(1, "#121722"), border_radius=14,
             border=ft.Border.all(1, ft.Colors.BLUE_GREY_800),
         ),
+        ft.Container(content=btn_borr, alignment=ft.Alignment.CENTER, margin=ft.Margin(left=0, top=14, right=0, bottom=0)),
     )
     refrescar_modelos()
 
