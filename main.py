@@ -1542,8 +1542,10 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
     page.scroll = None  # el desplazamiento lo maneja la lista (más fluido con muchos controles)
     lista_pantalla = ft.ListView(expand=True, spacing=0)
 
+    destino = {"controles": lista_pantalla.controls}
+
     def agregar(*controles):
-        lista_pantalla.controls.extend(controles)
+        destino["controles"].extend(controles)
     page.padding = 12
     page.theme_mode = ft.ThemeMode.DARK
     page.bgcolor = ft.Colors.with_opacity(1, "#0e1117")
@@ -1618,6 +1620,10 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 cb()
             except Exception:
                 pass
+        try:
+            page.update()
+        except Exception:
+            pass
 
     try:
         page.on_resize = _on_resize
@@ -1625,7 +1631,40 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
         pass
 
     def tam_pantalla():
-        return (page.width or 360), (page.height or 640)
+        w = h = None
+        try:
+            w, h = page.media.size.width, page.media.size.height
+        except Exception:
+            pass
+        if not w or not h or w <= 0 or h <= 0:
+            w, h = page.width, page.height
+        return (w or 360), (h or 640)
+
+    estado_vig = {"activo": False}
+
+    def firma_pantalla():
+        try:
+            m = (round(page.media.size.width), round(page.media.size.height))
+        except Exception:
+            m = None
+        return (m, page.width, page.height)
+
+    async def vigilar_pantalla():
+        # Si el teléfono rota y Flet no avisa, esto lo detecta y reacomoda la cámara / el editor.
+        ultimo = firma_pantalla()
+        while resize_cbs:
+            await asyncio.sleep(0.25)
+            actual = firma_pantalla()
+            if actual != ultimo:
+                ultimo = actual
+                _on_resize()
+        estado_vig["activo"] = False
+
+    def registrar_resize(cb):
+        resize_cbs.append(cb)
+        if not estado_vig["activo"]:
+            estado_vig["activo"] = True
+            page.run_task(vigilar_pantalla)
 
     # --- Utilidades de imagen ---
     def abrir_imagen(datos):
@@ -2092,11 +2131,24 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 marcar_error(llave, f"No se pudo guardar la foto: {ex}")
                 cerrar_editor()
 
+        if origen == "camara":
+            ico_retomar, tip_retomar = icono("CAMERASWITCH", ft.Icons.REPLAY), "Volver a tomar la foto"
+        else:
+            ico_retomar, tip_retomar = icono("PHOTO_LIBRARY", ft.Icons.IMAGE_SEARCH), "Elegir otra foto"
+
+        def retomar(e=None):
+            cerrar_editor()
+            if origen == "camara":
+                abrir_camara(llave)
+            else:
+                abrir_selector(llave)
+
         barra = ft.Container(
             bgcolor=ft.Colors.with_opacity(0.85, ft.Colors.BLACK), padding=8,
             content=ft.Column([
                 ft.Row(list(botones_herr.values()) + [btn_cerrar_poli], wrap=True, spacing=0, run_spacing=0),
                 ft.Row([
+                    ft.IconButton(icon=ico_retomar, tooltip=tip_retomar, icon_color=ft.Colors.AMBER_400, on_click=retomar),
                     ft.IconButton(icon=ft.Icons.ROTATE_LEFT, tooltip="Girar a la izquierda", icon_color=ft.Colors.WHITE, on_click=lambda e: rotar(-1)),
                     ft.IconButton(icon=ft.Icons.ROTATE_RIGHT, tooltip="Girar a la derecha", icon_color=ft.Colors.WHITE, on_click=lambda e: rotar(1)),
                     ft.IconButton(icon=ft.Icons.UNDO, tooltip="Deshacer", icon_color=ft.Colors.WHITE, on_click=deshacer),
@@ -2109,11 +2161,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                     ft.OutlinedButton("Sin anotar", on_click=lambda e: guardar(False)),
                     ft.TextButton("Cancelar", on_click=cerrar_editor),
                 ], wrap=True, spacing=6, run_spacing=4),
-                ft.OutlinedButton(
-                    "📷 Volver a tomar" if origen == "camara" else "🖼️ Elegir otra",
-                    on_click=lambda e: (cerrar_editor(), abrir_camara(llave) if origen == "camara" else abrir_selector(llave)),
-                ),
-            ], spacing=6),
+            ], spacing=4, scroll=ft.ScrollMode.AUTO),
         )
         caja = ft.Container(content=area, alignment=ft.Alignment.CENTER, left=0, top=0, right=0, bottom=0)
 
@@ -2125,9 +2173,10 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 barra.left, barra.right, barra.top, barra.bottom, barra.width = None, 0, 0, 0, 230
                 caja.right, caja.bottom = 230, 0
             else:
-                disp_w, disp_h = W - 16, H - 230
+                reserva = 260 if W < 430 else 200
+                disp_w, disp_h = W - 16, H - reserva - 40
                 barra.left, barra.right, barra.top, barra.bottom, barra.width = 0, 0, None, 0, None
-                caja.right, caja.bottom = 0, 200
+                caja.right, caja.bottom = 0, reserva
             esc = max(0.05, min(disp_w / iw, disp_h / ih))
             dw, dh = iw * esc, ih * esc
             est["dw"], est["dh"] = dw, dh
@@ -2139,7 +2188,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             expand=True, bgcolor=ft.Colors.BLACK,
             content=ft.SafeArea(content=ft.Stack([caja, barra], expand=True), expand=True),
         )
-        resize_cbs.append(ubicar)
+        registrar_resize(ubicar)
         page.overlay.append(raiz)
         ubicar()
         page.update()
@@ -2161,10 +2210,57 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
         dd_cam = ft.Dropdown(label="Cámara / lente", width=210, dense=True, text_size=13, visible=False)
         lista_camaras = []
 
+        # --- flash: apagado / automático / encendido / linterna ---
+        MODOS_FLASH = []
+        for nombre_m, attr_m, ico_m in (("Apagado", "OFF", "FLASH_OFF"), ("Automático", "AUTO", "FLASH_AUTO"),
+                                        ("Encendido", "ALWAYS", "FLASH_ON"), ("Linterna", "TORCH", "FLASHLIGHT_ON")):
+            modo_m = getattr(getattr(fc, "FlashMode", None), attr_m, None)
+            if modo_m is not None:
+                MODOS_FLASH.append((nombre_m, modo_m, getattr(ft.Icons, ico_m, ft.Icons.FLASH_ON)))
+        est_flash = {"i": 0}
+        btn_flash = ft.OutlinedButton(
+            f"Flash: {MODOS_FLASH[0][0]}" if MODOS_FLASH else "Flash",
+            icon=MODOS_FLASH[0][2] if MODOS_FLASH else ft.Icons.FLASH_OFF,
+            visible=bool(MODOS_FLASH),
+        )
+
+        async def aplicar_flash():
+            if not MODOS_FLASH:
+                return
+            try:
+                await camara.set_flash_mode(MODOS_FLASH[est_flash["i"]][1])
+            except Exception as ex_f:
+                estado_cam.value = f"Flash no disponible en esta cámara: {ex_f}"
+
+        async def alternar_flash(e=None):
+            if not MODOS_FLASH:
+                return
+            est_flash["i"] = (est_flash["i"] + 1) % len(MODOS_FLASH)
+            nombre_m, _modo, ico_m = MODOS_FLASH[est_flash["i"]]
+            btn_flash.content = f"Flash: {nombre_m}"
+            btn_flash.icon = ico_m
+            await aplicar_flash()
+            page.update()
+
+        btn_flash.on_click = alternar_flash
+
+        estado_ori = {"v": None}
+
+        async def al_cambiar_estado(e):
+            try:
+                ori = getattr(e, "device_orientation", None)
+                if ori != estado_ori["v"]:
+                    estado_ori["v"] = ori
+                    _redib()
+            except Exception:
+                pass
+
+        camara.on_state_change = al_cambiar_estado
+
         panel = ft.Container(
             bgcolor=ft.Colors.with_opacity(0.28, ft.Colors.BLACK), padding=8,
             content=ft.Column([
-                estado_cam, etq_zoom, sld_zoom, fila_zoom, dd_cam,
+                estado_cam, etq_zoom, sld_zoom, fila_zoom, dd_cam, btn_flash,
                 ft.Row([btn_tomar, ft.TextButton("Cancelar", on_click=lambda e: cerrar())], wrap=True, spacing=8),
             ], spacing=6, scroll=ft.ScrollMode.AUTO),
         )
@@ -2242,6 +2338,8 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 image_format_group=fc.ImageFormatGroup.JPEG,
             )
             await leer_zoom()
+            if est_flash["i"] != 0:
+                await aplicar_flash()
 
         async def leer_zoom():
             try:
@@ -2288,6 +2386,8 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                     try:
                         await camara.set_description(c)
                         await leer_zoom()
+                        if est_flash["i"] != 0:
+                            await aplicar_flash()
                     except Exception:
                         await iniciar(c)
                 except Exception as ex:
@@ -2296,7 +2396,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
 
         btn_tomar.on_click = tomar
         dd_cam.on_select = cambiar_camara
-        resize_cbs.append(_redib)
+        registrar_resize(_redib)
         ubicar()
         page.overlay.append(raiz)
         page.update()
@@ -2537,7 +2637,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 bytes_ext = f_ext.read()
             agregar(
                 ft.Text("🗺️ Esquema Guía General de Zonas", size=18, weight="bold", color=ft.Colors.WHITE),
-                ft.Image(src=bytes_ext, height=280, fit="contain", border_radius=8),
+                esquema_tocable(bytes_ext, ext),
                 ft.Text(f"Plano de Ubicación General de Componentes - {perfil['nombre']}", size=11, color=ft.Colors.GREY_400),
                 ft.Divider(height=20, color=ft.Colors.BLUE_GREY_800)
             )
@@ -2651,7 +2751,81 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             agregar_extra(key_id, cod_z, desc_z)
         return al_pulsar
 
+    def abrir_visor(datos_img, titulo):
+        """Muestra un esquema a pantalla completa: se pellizca para acercar y se arrastra para moverlo."""
+        def cerrar_visor(e=None):
+            if visor in page.overlay:
+                page.overlay.remove(visor)
+            page.update()
+        try:
+            contenido = ft.InteractiveViewer(
+                content=ft.Image(src=datos_img, fit=ft.BoxFit.CONTAIN),
+                min_scale=1, max_scale=8, expand=True,
+            )
+        except Exception:
+            contenido = ft.Image(src=datos_img, fit=ft.BoxFit.CONTAIN, expand=True)
+        visor = ft.Container(
+            expand=True, bgcolor=ft.Colors.BLACK,
+            content=ft.SafeArea(expand=True, content=ft.Stack([
+                ft.Container(content=contenido, left=0, top=0, right=0, bottom=0),
+                ft.Container(
+                    content=ft.Row([
+                        ft.Text(titulo, size=14, weight="bold", color=ft.Colors.WHITE, expand=True),
+                        ft.IconButton(icon=ft.Icons.CLOSE, icon_color=ft.Colors.WHITE, tooltip="Cerrar",
+                                      on_click=cerrar_visor, bgcolor=ft.Colors.with_opacity(0.5, ft.Colors.BLACK)),
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    left=8, right=8, top=4,
+                ),
+                ft.Container(
+                    content=ft.Text("Pellizca para acercar · arrastra para mover", size=12, color=ft.Colors.WHITE70),
+                    left=12, bottom=8,
+                ),
+            ], expand=True)),
+        )
+        page.overlay.append(visor)
+        page.update()
+
+    def esquema_tocable(datos_img, nombre_archivo):
+        titulo = os.path.splitext(nombre_archivo)[0].strip()
+        ancho_img = max(220, tam_pantalla()[0] - 24)
+        return ft.Column([
+            ft.GestureDetector(
+                content=ft.Image(src=datos_img, width=ancho_img, fit=ft.BoxFit.CONTAIN, border_radius=8),
+                on_tap=lambda e: abrir_visor(datos_img, titulo),
+            ),
+            ft.Text("🔍 Toca el esquema para ampliarlo", size=11, color=ft.Colors.GREY_400),
+        ], spacing=2)
+
+    resumenes_zona = {}
+    zonas_plegables = []
+
+    def actualizar_resumenes_zona():
+        for idx_zr, bz in enumerate(ESTRUCTURA_ZONAS):
+            lbl_r = resumenes_zona.get(idx_zr)
+            if lbl_r is None:
+                continue
+            n_p = len(bz["items"])
+            n_d = 0
+            for idx_ir in range(n_p):
+                k_r = f"z{idx_zr}_{idx_ir}"
+                c_r = controles.get(f"def_{k_r}")
+                if c_r is not None and c_r.value != "LF":
+                    n_d += 1
+                n_d += len(extras_por_punto.get(k_r, {}).get("ids", []))
+            lbl_r.value = f"{n_p} puntos · {n_d} con defecto" if n_d else f"{n_p} puntos"
+            lbl_r.color = ft.Colors.AMBER_400 if n_d else ft.Colors.GREY_400
+
+    def plegar_todo(plegar):
+        for cz, ic in zonas_plegables:
+            cz.visible = not plegar
+            try:
+                ic.icon = ft.Icons.ARROW_RIGHT if plegar else ft.Icons.ARROW_DROP_DOWN
+            except Exception:
+                pass
+        page.update()
+
     def reconstruir_resumen_ots():
+        actualizar_resumenes_zona()
         contenedor_resumen_ots.controls.clear()
         rechazos_actuales = []
         for idx_z, bz in enumerate(ESTRUCTURA_ZONAS):
@@ -2694,18 +2868,51 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                     ], spacing=6)
                 )
 
+    agregar(ft.Row([
+        ft.TextButton("▼ Desplegar todas las zonas", on_click=lambda e: plegar_todo(False)),
+        ft.TextButton("▶ Plegar todas", on_click=lambda e: plegar_todo(True)),
+    ], wrap=True, spacing=4))
+
     for idx_z, zona in enumerate(ESTRUCTURA_ZONAS):
-        agregar(ft.Text(zona["titulo"], size=22, weight="bold", color=ft.Colors.BLUE_200))
+        lbl_resumen_z = ft.Text("", size=12, color=ft.Colors.GREY_400)
+        resumenes_zona[idx_z] = lbl_resumen_z
+        cont_zona = ft.Column(spacing=0, visible=False)
+        icono_zona = ft.Icon(ft.Icons.ARROW_RIGHT, color=ft.Colors.BLUE_200, size=34)
+        zonas_plegables.append((cont_zona, icono_zona))
+
+        def alternar_zona(e, cz=cont_zona, ic=icono_zona):
+            cz.visible = not cz.visible
+            try:
+                ic.icon = ft.Icons.ARROW_DROP_DOWN if cz.visible else ft.Icons.ARROW_RIGHT
+            except Exception:
+                pass
+            page.update()
+
+        cabecera_zona = ft.Container(
+            content=ft.Row([
+                ft.Column([
+                    ft.Text(zona["titulo"], size=20, weight="bold", color=ft.Colors.BLUE_200),
+                    lbl_resumen_z,
+                ], spacing=2, expand=True),
+                icono_zona,
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding(left=12, top=8, right=12, bottom=8),
+            bgcolor=ft.Colors.with_opacity(1, "#121722"), border_radius=10,
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_800),
+            on_click=alternar_zona,
+            margin=ft.Margin(left=0, top=10, right=0, bottom=4),
+        )
+        lista_pantalla.controls.append(cabecera_zona)
+        lista_pantalla.controls.append(cont_zona)
+        destino["controles"] = cont_zona.controls
         
-        imagenes_row = ft.Row(spacing=20, wrap=True)
+        imagenes_row = ft.Column(spacing=10)
         for img_name in zona["esquema"]:
             ruta_local = buscar_recurso(perfil["carpeta_esquemas"], img_name)
             if ruta_local:
                 with open(ruta_local, "rb") as f_loc:
                     bytes_loc = f_loc.read()
-                imagenes_row.controls.append(
-                    ft.Image(src=bytes_loc, height=220, fit="contain", border_radius=8)
-                )
+                imagenes_row.controls.append(esquema_tocable(bytes_loc, img_name))
             else:
                 imagenes_row.controls.append(
                     ft.Text(f"⚠️ No se encontró el esquema '{img_name}' (carpeta {perfil['carpeta_esquemas']})", size=12, color=ft.Colors.AMBER_400)
@@ -2908,6 +3115,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             ft.Text(LEYENDA_TECNICA, size=11, color=ft.Colors.GREY_500),
             ft.Divider(height=35, color=ft.Colors.BLUE_GREY_800)
         )
+        destino["controles"] = lista_pantalla.controls
 
     # ==========================================================================
     # SECCIÓN 4: ZONAS A REPARAR (RESUMEN DE OTs)
