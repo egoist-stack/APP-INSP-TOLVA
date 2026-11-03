@@ -373,7 +373,7 @@ PERFIL_TOLVA_DT = {
     "estructura": ESTRUCTURA_ZONAS_DT,
     "celdas": {"cliente": "C5", "lugar": "C6", "fecha": "C7", "tolva": "H6", "equipo": "L6",
                "horometro": "L7", "informe": "P5", "revision": "P6", "pm": "P7"},
-    "matriz": {"remerge": False, "fila_ini": 9, "fila_fin": 27},
+    "matriz": {"remerge": False, "fila_ini": 9, "fila_fin": 27, "col_inicio": 10},
     "cierre": {"fila_ot": 198, "fila_ot_max": 205, "fila_nombre": 207, "fila_firma": 208,
                "firma_filas": 3, "fila_fecha": 211, "fila_final": 211},
     "prefijo_informe": "ZAM-IF",
@@ -420,6 +420,23 @@ def es_pm_espesores(pm_str):
 # 2. MOTOR DE PROCESAMIENTO DE EXCEL Y XML (100% FIEL AL ORIGINAL)
 # ==============================================================================
 _OPCIONES_INSERCION = {"desplazar_alturas": False}
+
+def _escala_que_cabe(ws, escala_max=50):
+    import math
+    anchos = {}
+    for dim in ws.column_dimensions.values():
+        if dim.width:
+            for c in range(dim.min or 1, (dim.max or dim.min or 1) + 1):
+                anchos[c] = dim.width
+    ancho_def = ws.sheet_format.defaultColWidth or 8.43
+    total_pt = 0.0
+    for c in range(1, 19):
+        w = anchos.get(c, ancho_def)
+        total_pt += math.trunc(w * 7 + 5) * 0.75
+    papel_pt = 612.0 if ws.page_setup.paperSize == 1 else 595.3   # carta / A4 (vertical)
+    imprimible = papel_pt - (ws.page_margins.left + ws.page_margins.right) * 72
+    # 4 % de holgura: Excel y las impresoras reservan un poco más que los márgenes de la plantilla
+    return int(max(20, min(escala_max, math.floor(0.96 * imprimible / total_pt * 100))))
 
 def _insertar_filas_seguro(ws, fila_insercion, cantidad):
     merges_originales = list(ws.merged_cells.ranges)
@@ -764,7 +781,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                     fila_ini_fondo = cfg_matriz["fila_ini"]
                     fila_fin_fondo = cfg_matriz["fila_fin"]
 
-                col_matriz = 11  # K (rótulos de fila); los 7 valores van en L..R
+                col_matriz = cfg_matriz.get("col_inicio", 11)   # columna de rótulos; los 7 valores van a su derecha
                 borde = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
                 borde_titulo = Border(left=Side(style="medium"), right=Side(style="medium"), top=Side(style="medium"), bottom=Side(style="medium"))
                 align = Alignment(horizontal="center", vertical="center")
@@ -774,11 +791,11 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                 offset_centrado = max(0, (alto_disponible - alto_bloque_matriz) // 2)
                 fila_titulo_espesores = fila_ini_fondo + offset_centrado
 
-                ws.merge_cells(start_row=fila_titulo_espesores, start_column=col_matriz, end_row=fila_titulo_espesores, end_column=18)
+                ws.merge_cells(start_row=fila_titulo_espesores, start_column=col_matriz, end_row=fila_titulo_espesores, end_column=col_matriz + 7)
                 c_titulo = ws.cell(row=fila_titulo_espesores, column=col_matriz, value="ESPESORES DE PISO")
                 c_titulo.font = Font(bold=True)
                 c_titulo.alignment = align
-                for col in range(col_matriz, 19):
+                for col in range(col_matriz, col_matriz + 8):
                     ws.cell(row=fila_titulo_espesores, column=col).border = borde_titulo
                 ws.row_dimensions[fila_titulo_espesores].height = 20
 
@@ -808,7 +825,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
 
                 if (matriz_espesores == "-").all().all():
                     nota = ws.cell(row=fila_matriz + 8, column=col_matriz, value="NO SE REALIZÓ MEDICIÓN DE ESPESORES")
-                    ws.merge_cells(start_row=fila_matriz + 8, start_column=col_matriz, end_row=fila_matriz + 8, end_column=18)
+                    ws.merge_cells(start_row=fila_matriz + 8, start_column=col_matriz, end_row=fila_matriz + 8, end_column=col_matriz + 7)
                     nota.font = Font(bold=True, color="FF0000")
             except Exception:
                 matriz_espesores_omitida = True
@@ -1101,13 +1118,13 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
             "bytes_png": buf_firma.getvalue(),
         })
 
-    ws.page_setup.scale = 50
+    ws.page_setup.scale = _escala_que_cabe(ws, 50)
     if ws.sheet_properties.pageSetUpPr is None:
         ws.sheet_properties.pageSetUpPr = PageSetupProperties()
     ws.sheet_properties.pageSetUpPr.fitToPage = False
 
     fila_final_original = cierre["fila_final"]
-    fila_final_nueva = fila_final_original + desplazamiento
+    fila_final_nueva = max(fila_final_original + desplazamiento, fila_fecha)
     ws.print_area = f"A1:R{fila_final_nueva}"
 
     if perfil.get("quitar_hojas_extra"):
@@ -1535,10 +1552,15 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         vista.save(buf, "JPEG", quality=80)
         grosor_img = max(4, iw // 200)
         COLORES = ["#FF1744", "#FFEA00", "#00E676", "#FFFFFF"]
-        est = {"herr": "rect", "color": COLORES[0], "actual": None, "dw": 1.0, "dh": 1.0}
+        est = {"herr": "rect", "color": COLORES[0], "actual": None, "dw": 1.0, "dh": 1.0,
+               "sel": None, "drag": None, "poli": []}
         formas = []
+        TOL = 30.0   # tolerancia táctil (píxeles) para tocar una forma o uno de sus puntos
 
         img_ctl = ft.Image(src=buf.getvalue(), fit=ft.BoxFit.FILL)
+
+        def icono(nombre_ic, alterno):
+            return getattr(ft.Icons, nombre_ic, alterno)
 
         def clamp01(v):
             return max(0.0, min(1.0, v))
@@ -1550,15 +1572,25 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             p2 = (x1 - largo * math.cos(ang + t), y1 - largo * math.sin(ang + t))
             return p1, p2
 
+        def esquinas(d):
+            x0, y0, x1, y1 = d[0], d[1], d[2], d[3]
+            return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+        def a_pix(pts):
+            return [(x * est["dw"], y * est["dh"]) for x, y in pts]
+
+        # ---------- dibujo en pantalla ----------
         def a_cv(f):
             dw, dh = est["dw"], est["dh"]
             g = max(2.5, grosor_img * dw / iw)
             paint = ft.Paint(color=f["color"], stroke_width=g, style=ft.PaintingStyle.STROKE)
             d = f["datos"]
-            if f["tipo"] == "lapiz":
-                pts = [(x * dw, y * dh) for x, y in d]
+            if f["tipo"] in ("lapiz", "poli"):
+                pts = a_pix(d)
                 if len(pts) < 2:
                     return []
+                if f["tipo"] == "poli" and f.get("cerrada", True):
+                    pts = pts + [pts[0]]
                 els = [cv.Path.MoveTo(pts[0][0], pts[0][1])] + [cv.Path.LineTo(x, y) for x, y in pts[1:]]
                 return [cv.Path(els, paint=paint)]
             x0, y0, x1, y1 = d[0] * dw, d[1] * dh, d[2] * dw, d[3] * dh
@@ -1573,49 +1605,232 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                 cv.Line(x1, y1, p2[0], p2[1], paint=paint),
             ]
 
+        # ---------- puntos de control y selección ----------
+        def manijas(f):
+            d = f["datos"]
+            if f["tipo"] in ("rect", "oval"):
+                return list(enumerate(esquinas(d)))
+            if f["tipo"] == "flecha":
+                return [(0, (d[0], d[1])), (1, (d[2], d[3]))]
+            if f["tipo"] == "poli" or (f["tipo"] == "lapiz" and len(d) == 2):
+                return list(enumerate(d))
+            return []
+
+        def dibujar_manijas(f):
+            dw, dh = est["dw"], est["dh"]
+            out = []
+            for _i, (x, y) in manijas(f):
+                out.append(cv.Circle(x * dw, y * dh, 10, paint=ft.Paint(color=ft.Colors.WHITE, style=ft.PaintingStyle.FILL)))
+                out.append(cv.Circle(x * dw, y * dh, 10, paint=ft.Paint(color="#2979FF", stroke_width=3, style=ft.PaintingStyle.STROKE)))
+            return out
+
+        def dist_seg(px, py, ax, ay, bx, by):
+            dx, dy = bx - ax, by - ay
+            l2 = dx * dx + dy * dy
+            if l2 == 0:
+                return math.hypot(px - ax, py - ay)
+            t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / l2))
+            return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+        def dist_poli(pts, cerrada, px, py):
+            if not pts:
+                return 1e9
+            if len(pts) == 1:
+                return math.hypot(px - pts[0][0], py - pts[0][1])
+            pares = list(zip(pts, pts[1:] + ([pts[0]] if cerrada else [])))
+            return min(dist_seg(px, py, a1[0], a1[1], b1[0], b1[1]) for a1, b1 in pares)
+
+        def distancia_a_forma(f, px, py):
+            d = f["datos"]
+            t = f["tipo"]
+            dw, dh = est["dw"], est["dh"]
+            if t == "rect":
+                return dist_poli(a_pix(esquinas(d)), True, px, py)
+            if t == "oval":
+                a_ = abs(d[2] - d[0]) * dw / 2
+                b_ = abs(d[3] - d[1]) * dh / 2
+                if a_ < 1 or b_ < 1:
+                    return 1e9
+                cx_, cy_ = (d[0] + d[2]) / 2 * dw, (d[1] + d[3]) / 2 * dh
+                r = math.hypot((px - cx_) / a_, (py - cy_) / b_)
+                return abs(r - 1) * min(a_, b_)
+            if t == "flecha":
+                return dist_poli(a_pix([(d[0], d[1]), (d[2], d[3])]), False, px, py)
+            if t == "lapiz":
+                return dist_poli(a_pix(d), False, px, py)
+            return dist_poli(a_pix(d), f.get("cerrada", True), px, py)
+
+        def mover_forma(f, dx, dy):
+            d = f["datos"]
+            if f["tipo"] in ("rect", "oval", "flecha"):
+                xs, ys = [d[0], d[2]], [d[1], d[3]]
+            else:
+                xs, ys = [p_[0] for p_ in d], [p_[1] for p_ in d]
+            dx = max(-min(xs), min(1 - max(xs), dx))
+            dy = max(-min(ys), min(1 - max(ys), dy))
+            if f["tipo"] in ("rect", "oval", "flecha"):
+                d[0] += dx; d[1] += dy; d[2] += dx; d[3] += dy
+            else:
+                f["datos"] = [(x + dx, y + dy) for x, y in d]
+
+        def mover_manija(f, idx, x, y):
+            d = f["datos"]
+            if f["tipo"] == "rect":      # al mover una esquina, el rectángulo pasa a ser un cuadrilátero libre
+                f["datos"] = esquinas(d)
+                f["tipo"] = "poli"
+                f["cerrada"] = True
+                d = f["datos"]
+            if f["tipo"] == "oval":
+                if idx in (0, 3):
+                    d[0] = x
+                else:
+                    d[2] = x
+                if idx in (0, 1):
+                    d[1] = y
+                else:
+                    d[3] = y
+            elif f["tipo"] == "flecha":
+                if idx == 0:
+                    d[0], d[1] = x, y
+                else:
+                    d[2], d[3] = x, y
+            else:
+                d[idx] = (x, y)
+
+        def buscar_manija(px, py):
+            if est["sel"] is None or est["sel"] >= len(formas):
+                return None
+            for idx, (x, y) in manijas(formas[est["sel"]]):
+                if math.hypot(px - x * est["dw"], py - y * est["dh"]) <= TOL:
+                    return idx
+            return None
+
+        def seleccionar_en(x, y):
+            px, py = x * est["dw"], y * est["dh"]
+            if buscar_manija(px, py) is not None:
+                return
+            acierto = None
+            for i in range(len(formas) - 1, -1, -1):
+                if distancia_a_forma(formas[i], px, py) <= TOL:
+                    acierto = i
+                    break
+            est["sel"] = acierto
+
+        def iniciar_mover(x, y):
+            seleccionar_en(x, y)
+            est["drag"] = None
+            if est["sel"] is not None:
+                m = buscar_manija(x * est["dw"], y * est["dh"])
+                est["drag"] = ({"modo": "manija", "idx": m, "ult": (x, y)} if m is not None
+                               else {"modo": "mover", "ult": (x, y)})
+            dibujar()
+
+        def arrastrar(x, y):
+            dr = est["drag"]
+            if not dr or est["sel"] is None or est["sel"] >= len(formas):
+                return
+            f = formas[est["sel"]]
+            if dr["modo"] == "manija":
+                mover_manija(f, dr["idx"], x, y)
+            else:
+                mover_forma(f, x - dr["ult"][0], y - dr["ult"][1])
+                dr["ult"] = (x, y)
+            dibujar()
+
+        # ---------- polígono (formas difíciles) ----------
+        def cerrar_poligono(e=None):
+            pts = est["poli"]
+            if len(pts) >= 3:
+                formas.append({"tipo": "poli", "color": est["color"], "datos": list(pts), "cerrada": True})
+            elif len(pts) == 2:
+                formas.append({"tipo": "lapiz", "color": est["color"], "datos": list(pts), "recta": True})
+            est["poli"] = []
+            dibujar()
+
+        def agregar_vertice(x, y):
+            pts = est["poli"]
+            if len(pts) >= 3 and math.hypot((x - pts[0][0]) * est["dw"], (y - pts[0][1]) * est["dh"]) <= TOL:
+                cerrar_poligono()
+                return
+            pts.append((x, y))
+            dibujar()
+
         def dibujar():
             shapes = []
-            for f in formas + ([est["actual"]] if est["actual"] else []):
+            for f in formas:
                 shapes.extend(a_cv(f))
+            if est["actual"]:
+                shapes.extend(a_cv(est["actual"]))
+            if est["poli"]:
+                g = max(2.5, grosor_img * est["dw"] / iw)
+                pts = a_pix(est["poli"])
+                if len(pts) >= 2:
+                    els = [cv.Path.MoveTo(pts[0][0], pts[0][1])] + [cv.Path.LineTo(x, y) for x, y in pts[1:]]
+                    shapes.append(cv.Path(els, paint=ft.Paint(color=est["color"], stroke_width=g, style=ft.PaintingStyle.STROKE)))
+                for (x, y) in pts:
+                    shapes.append(cv.Circle(x, y, 7, paint=ft.Paint(color=est["color"], style=ft.PaintingStyle.FILL)))
+            if est["sel"] is not None and est["sel"] < len(formas):
+                shapes.extend(dibujar_manijas(formas[est["sel"]]))
             lienzo.shapes = shapes
             lienzo.update()
 
+        # ---------- lápiz: al mantener quieto el dedo, el trazo se endereza ----------
         async def vigilar_enderezado(forma):
-            # si el dedo se queda quieto ~0.6 s, el trazo se convierte en una recta
             while est["actual"] is forma:
-                await asyncio.sleep(0.12)
+                await asyncio.sleep(0.1)
                 if (est["actual"] is forma and not forma.get("recta") and len(forma["datos"]) > 2
-                        and time.monotonic() - forma.get("t_mov", 0) > 0.6):
+                        and time.monotonic() - forma.get("t_mov", 0) > 0.55):
                     forma["datos"] = [forma["datos"][0], forma["datos"][-1]]
                     forma["recta"] = True
                     dibujar()
 
+        def coord(e):
+            return (clamp01(e.local_position.x / est["dw"]), clamp01(e.local_position.y / est["dh"]))
+
         def pan_start(e):
-            x = clamp01(e.local_position.x / est["dw"])
-            y = clamp01(e.local_position.y / est["dh"])
-            if est["herr"] == "lapiz":
-                est["actual"] = {"tipo": "lapiz", "color": est["color"], "datos": [(x, y)], "t_mov": time.monotonic()}
+            x, y = coord(e)
+            h = est["herr"]
+            if h == "mover":
+                iniciar_mover(x, y)
+            elif h == "poligono":
+                return
+            elif h == "lapiz":
+                est["actual"] = {"tipo": "lapiz", "color": est["color"], "datos": [(x, y)],
+                                 "t_mov": time.monotonic(), "ancla": (x, y)}
                 page.run_task(vigilar_enderezado, est["actual"])
             else:
-                est["actual"] = {"tipo": est["herr"], "color": est["color"], "datos": [x, y, x, y]}
+                est["actual"] = {"tipo": h, "color": est["color"], "datos": [x, y, x, y]}
 
         def pan_update(e):
+            x, y = coord(e)
+            h = est["herr"]
+            if h == "mover":
+                arrastrar(x, y)
+                return
             f = est["actual"]
             if not f:
                 return
-            x = clamp01(e.local_position.x / est["dw"])
-            y = clamp01(e.local_position.y / est["dh"])
             if f["tipo"] == "lapiz":
-                f["t_mov"] = time.monotonic()
+                ax, ay = f["ancla"]
+                # el dedo "quieto" siempre tiembla un poco: solo cuenta como movimiento si pasa de ~5 px
+                if math.hypot((x - ax) * est["dw"], (y - ay) * est["dh"]) > 5.0:
+                    f["t_mov"] = time.monotonic()
+                    f["ancla"] = (x, y)
                 if f.get("recta"):
                     f["datos"][1] = (x, y)
                 else:
-                    f["datos"].append((x, y))
+                    ux, uy = f["datos"][-1]
+                    if math.hypot((x - ux) * est["dw"], (y - uy) * est["dh"]) > 1.2:
+                        f["datos"].append((x, y))
             else:
                 f["datos"][2], f["datos"][3] = x, y
             dibujar()
 
         def pan_end(e=None):
+            if est["herr"] == "mover":
+                est["drag"] = None
+                dibujar()
+                return
             f = est["actual"]
             est["actual"] = None
             if f:
@@ -1625,31 +1840,54 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
                     formas.append(f)
             dibujar()
 
-        lienzo = cv.Canvas(
-            shapes=[],
-            content=ft.GestureDetector(
-                on_pan_start=pan_start, on_pan_update=pan_update, on_pan_end=pan_end, drag_interval=15
-            ),
-        )
+        def tap_down(e):
+            try:
+                x, y = coord(e)
+            except Exception:
+                return
+            if est["herr"] == "mover":
+                seleccionar_en(x, y)
+                dibujar()
+            elif est["herr"] == "poligono":
+                agregar_vertice(x, y)
+
+        try:
+            detector = ft.GestureDetector(on_pan_start=pan_start, on_pan_update=pan_update, on_pan_end=pan_end,
+                                          on_tap_down=tap_down, drag_interval=15)
+        except TypeError:
+            detector = ft.GestureDetector(on_pan_start=pan_start, on_pan_update=pan_update, on_pan_end=pan_end,
+                                          drag_interval=15)
+        lienzo = cv.Canvas(shapes=[], content=detector)
         area = ft.Stack([img_ctl, lienzo])
 
         # --- barra de herramientas ---
         botones_herr = {}
+        btn_cerrar_poli = ft.IconButton(icon=icono("CHECK_CIRCLE_OUTLINE", ft.Icons.CHECK), tooltip="Cerrar forma",
+                                        icon_color=ft.Colors.AMBER_400, visible=False, on_click=cerrar_poligono)
 
         def elegir_herr(h):
+            if est["herr"] == "poligono" and h != "poligono":
+                cerrar_poligono()
             est["herr"] = h
+            if h != "mover":
+                est["sel"] = None
+                est["drag"] = None
             for k, b_ in botones_herr.items():
                 b_.icon_color = ft.Colors.AMBER_400 if k == h else ft.Colors.WHITE
+            btn_cerrar_poli.visible = (h == "poligono")
+            dibujar()
             page.update()
 
-        for clave, icono, tip in [
+        for clave, ico, tip in [
             ("rect", ft.Icons.CROP_SQUARE, "Rectángulo"),
             ("oval", ft.Icons.PANORAMA_FISH_EYE, "Círculo"),
             ("flecha", ft.Icons.NORTH_EAST, "Flecha"),
-            ("lapiz", ft.Icons.EDIT, "Lápiz"),
+            ("lapiz", ft.Icons.EDIT, "Lápiz (mantén quieto para enderezar)"),
+            ("poligono", icono("POLYLINE", ft.Icons.CROP_SQUARE), "Polígono: toca los vértices"),
+            ("mover", icono("OPEN_WITH", ft.Icons.EDIT), "Mover / editar puntos"),
         ]:
             botones_herr[clave] = ft.IconButton(
-                icon=icono, tooltip=tip, icon_color=ft.Colors.WHITE,
+                icon=ico, tooltip=tip, icon_color=ft.Colors.WHITE,
                 on_click=lambda e, c=clave: elegir_herr(c),
             )
         botones_herr["rect"].icon_color = ft.Colors.AMBER_400
@@ -1660,6 +1898,9 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             est["color"] = c
             for k, ch in chips.items():
                 ch.border = ft.Border.all(3, ft.Colors.WHITE if k == c else ft.Colors.TRANSPARENT)
+            if est["sel"] is not None and est["sel"] < len(formas):   # si hay una forma seleccionada, cambia su color
+                formas[est["sel"]]["color"] = c
+                dibujar()
             page.update()
 
         for c in COLORES:
@@ -1680,16 +1921,29 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
             v2.save(b2, "JPEG", quality=80)
             img_ctl.src = b2.getvalue()
             formas.clear()
+            est["sel"] = None
+            est["poli"] = []
             ubicar()
             page.update()
 
         def deshacer(e=None):
-            if formas:
+            if est["poli"]:
+                est["poli"].pop()
+            elif formas:
                 formas.pop()
-                dibujar()
+                est["sel"] = None
+            dibujar()
+
+        def quitar_seleccion(e=None):
+            if est["sel"] is not None and est["sel"] < len(formas):
+                formas.pop(est["sel"])
+            est["sel"] = None
+            dibujar()
 
         def borrar_todo(e=None):
             formas.clear()
+            est["sel"] = None
+            est["poli"] = []
             dibujar()
 
         def cerrar_editor(e=None):
@@ -1701,14 +1955,18 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
 
         def guardar(anotar):
             try:
+                if est["poli"]:
+                    cerrar_poligono()
                 salida = im.copy()
                 if anotar and formas:
                     d = ImageDraw.Draw(salida)
                     for f in formas:
                         col = f["color"]
                         dd = f["datos"]
-                        if f["tipo"] == "lapiz":
+                        if f["tipo"] in ("lapiz", "poli"):
                             pts = [(x * iw, y * ih) for x, y in dd]
+                            if f["tipo"] == "poli" and f.get("cerrada", True) and len(pts) > 2:
+                                pts = pts + [pts[0]]
                             if len(pts) > 1:
                                 d.line(pts, fill=col, width=grosor_img, joint="curve")
                             continue
@@ -1732,10 +1990,12 @@ def construir_formulario(page: ft.Page, perfil, volver=None):
         barra = ft.Container(
             bgcolor=ft.Colors.with_opacity(0.85, ft.Colors.BLACK), padding=8,
             content=ft.Column([
-                ft.Row(list(botones_herr.values()) + [
+                ft.Row(list(botones_herr.values()) + [btn_cerrar_poli], wrap=True, spacing=0, run_spacing=0),
+                ft.Row([
                     ft.IconButton(icon=ft.Icons.ROTATE_LEFT, tooltip="Girar a la izquierda", icon_color=ft.Colors.WHITE, on_click=lambda e: rotar(-1)),
                     ft.IconButton(icon=ft.Icons.ROTATE_RIGHT, tooltip="Girar a la derecha", icon_color=ft.Colors.WHITE, on_click=lambda e: rotar(1)),
                     ft.IconButton(icon=ft.Icons.UNDO, tooltip="Deshacer", icon_color=ft.Colors.WHITE, on_click=deshacer),
+                    ft.IconButton(icon=icono("REMOVE_CIRCLE_OUTLINE", ft.Icons.DELETE_OUTLINE), tooltip="Quitar la forma seleccionada", icon_color=ft.Colors.WHITE, on_click=quitar_seleccion),
                     ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Borrar todo", icon_color=ft.Colors.WHITE, on_click=borrar_todo),
                 ], wrap=True, spacing=0, run_spacing=0),
                 ft.Row(list(chips.values()), spacing=10),
