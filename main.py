@@ -394,7 +394,7 @@ PERFIL_TOLVA_DT = {
 
 # Equipos que la empresa maneja, agrupados por tipo. Solo los que tienen perfil se pueden usar.
 CATALOGO_EQUIPOS = {
-    "TOLVAS": ["CAT", "DT"],
+    "CAMIONES": ["TOLVAS CAT", "TOLVAS DT"],
     "PALAS": ["7495A", "7495B", "6060"],
     "EXCAVADORAS": ["6015"],
     "TRACTOR ORUGA": ["D10T2", "D11T"],
@@ -404,8 +404,13 @@ CATALOGO_EQUIPOS = {
     "CARGADOR": ["992", "2350"],
 }
 PERFILES = {
-    ("TOLVAS", "CAT"): PERFIL_TOLVA_CAT,
-    ("TOLVAS", "DT"): PERFIL_TOLVA_DT,
+    ("CAMIONES", "TOLVAS CAT"): PERFIL_TOLVA_CAT,
+    ("CAMIONES", "TOLVAS DT"): PERFIL_TOLVA_DT,
+}
+# nombres antiguos (borradores guardados antes del cambio de menú)
+ALIAS_PERFIL = {
+    ("TOLVAS", "CAT"): ("CAMIONES", "TOLVAS CAT"),
+    ("TOLVAS", "DT"): ("CAMIONES", "TOLVAS DT"),
 }
 
 def _dir_borradores():
@@ -1543,6 +1548,14 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
     lista_pantalla = ft.ListView(expand=True, spacing=0)
 
     destino = {"controles": lista_pantalla.controls}
+    pila_atras = []   # funciones que cierran lo último abierto (visor, editor, cámara)
+
+    def registrar_atras(fn):
+        pila_atras.append(fn)
+
+    def quitar_atras(fn):
+        if fn in pila_atras:
+            pila_atras.remove(fn)
 
     def agregar(*controles):
         destino["controles"].extend(controles)
@@ -2091,6 +2104,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             dibujar()
 
         def cerrar_editor(e=None):
+            quitar_atras(cerrar_editor)
             if raiz in page.overlay:
                 page.overlay.remove(raiz)
             if ubicar in resize_cbs:
@@ -2189,6 +2203,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             content=ft.SafeArea(content=ft.Stack([caja, barra], expand=True), expand=True),
         )
         registrar_resize(ubicar)
+        registrar_atras(cerrar_editor)
         page.overlay.append(raiz)
         ubicar()
         page.update()
@@ -2292,6 +2307,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
         )
 
         def cerrar():
+            quitar_atras(cerrar)
             if raiz in page.overlay:
                 page.overlay.remove(raiz)
             if _redib in resize_cbs:
@@ -2398,6 +2414,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
         dd_cam.on_select = cambiar_camara
         registrar_resize(_redib)
         ubicar()
+        registrar_atras(cerrar)
         page.overlay.append(raiz)
         page.update()
 
@@ -2754,6 +2771,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
     def abrir_visor(datos_img, titulo):
         """Muestra un esquema a pantalla completa: se pellizca para acercar y se arrastra para moverlo."""
         def cerrar_visor(e=None):
+            quitar_atras(cerrar_visor)
             if visor in page.overlay:
                 page.overlay.remove(visor)
             page.update()
@@ -2782,6 +2800,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 ),
             ], expand=True)),
         )
+        registrar_atras(cerrar_visor)
         page.overlay.append(visor)
         page.update()
 
@@ -3398,6 +3417,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             btn_compartir.visible = True
             btn_guardar_excel.visible = True
             btn_finalizar.visible = True
+            marcar_guardado()
         except Exception as ex:
             texto_estado.value = f"❌ Error al generar el reporte: {ex}"
             texto_estado.color = ft.Colors.RED_400
@@ -3446,6 +3466,24 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             "extras": {k: {"n": v["n"], "ids": list(v["ids"])} for k, v in extras_por_punto.items() if v["ids"]},
         }
 
+    estado_base = {"v": None}
+
+    def firma_estado():
+        fotos_f = {}
+        for k_f, r_f in rutas_fotos.items():
+            try:
+                fotos_f[k_f] = [r_f, os.path.getmtime(r_f)]
+            except Exception:
+                fotos_f[k_f] = [r_f, 0]
+        return json.dumps([recolectar_estado(), fotos_f], sort_keys=True, default=str)
+
+    def marcar_guardado():
+        """Recuerda cómo estaba el formulario: si no cambia, al salir no se pregunta nada."""
+        try:
+            estado_base["v"] = firma_estado()
+        except Exception:
+            estado_base["v"] = None
+
     def guardar_borrador_ui(salir=False):
         try:
             datos = recolectar_estado()
@@ -3453,12 +3491,23 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
         except Exception as ex:
             aviso("No se pudo guardar el borrador", str(ex))
             return
+        marcar_guardado()
         if salir and volver is not None:
             volver()
         else:
             aviso("Borrador guardado", f"{datos['nombre']}\n\nLo encuentras en el menú principal, en «Borradores».")
 
     def pedir_salir(e=None):
+        if volver is None:
+            return
+        try:
+            sin_cambios = estado_base["v"] is not None and firma_estado() == estado_base["v"]
+        except Exception:
+            sin_cambios = False
+        if sin_cambios:      # ya guardaste el borrador / ya generaste el Excel / no cambiaste nada
+            volver()
+            return
+
         def guardar_y_salir(ev):
             page.pop_dialog()
             guardar_borrador_ui(salir=True)
@@ -3537,7 +3586,33 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                     ctl.value = "✅ " + os.path.basename(ruta)
                     ctl.color = ft.Colors.GREEN_400
 
-    page.add(lista_pantalla)
+    vista_form = {"v": None}
+
+    async def al_confirmar_atras(e=None):
+        # gesto / botón "atrás" del teléfono: primero cierra cámara, editor o visor; si no hay nada abierto, pregunta por el borrador
+        try:
+            if vista_form["v"] is not None:
+                await vista_form["v"].confirm_pop(False)
+        except Exception:
+            pass
+        if pila_atras:
+            pila_atras[-1]()
+            return
+        pedir_salir()
+
+    try:
+        vista_form["v"] = ft.View(
+            route="/formulario",
+            controls=[ft.SafeArea(content=lista_pantalla, expand=True)],
+            padding=ft.Padding(left=12, top=12, right=12, bottom=12),
+            bgcolor=ft.Colors.with_opacity(1, "#0e1117"),
+            can_pop=False,
+            on_confirm_pop=al_confirmar_atras,
+        )
+        page.views.append(vista_form["v"])
+    except Exception:
+        vista_form["v"] = None
+        page.add(lista_pantalla)
     page.update()
     if borrador:
         try:
@@ -3545,6 +3620,17 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
         except Exception as ex_r:
             aviso("Borrador", f"No se pudo restaurar todo el borrador: {ex_r}")
         page.update()
+    marcar_guardado()
+
+
+def ir_al_menu(page: ft.Page):
+    """Vuelve a la pantalla principal quitando todas las pantallas apiladas encima."""
+    try:
+        del page.views[1:]
+    except Exception:
+        pass
+    mostrar_selector(page)
+    page.update()
 
 
 def mostrar_borradores(page: ft.Page):
@@ -3554,12 +3640,8 @@ def mostrar_borradores(page: ft.Page):
             lista.clear()
         except Exception:
             pass
-    page.controls.clear()
     page.title = "INSPKTOR"
-    page.scroll = "adaptive"
-    page.padding = 12
     page.theme_mode = ft.ThemeMode.DARK
-    page.bgcolor = ft.Colors.with_opacity(1, "#0e1117")
     cont = ft.Column(spacing=10)
 
     def aviso_b(titulo, texto):
@@ -3572,12 +3654,11 @@ def mostrar_borradores(page: ft.Page):
         try:
             datos = cargar_borrador(b["id"])
             clave = tuple(datos.get("perfil") or ())
-            perfil_b = PERFILES.get(clave)
+            perfil_b = PERFILES.get(clave) or PERFILES.get(ALIAS_PERFIL.get(clave))
             if perfil_b is None:
                 aviso_b("No se puede abrir", "Este borrador es de un equipo que ya no está disponible.")
                 return
-            page.controls.clear()
-            construir_formulario(page, perfil_b, volver=lambda: mostrar_selector(page), borrador=datos)
+            construir_formulario(page, perfil_b, volver=lambda: ir_al_menu(page), borrador=datos)
         except Exception as ex:
             aviso_b("No se pudo abrir el borrador", str(ex))
 
@@ -3620,12 +3701,22 @@ def mostrar_borradores(page: ft.Page):
             cont.controls.append(tarjeta(b))
         page.update()
 
-    page.add(
-        ft.TextButton("← Volver", on_click=lambda e: mostrar_selector(page)),
+    contenido_b = [
+        ft.TextButton("← Volver", on_click=lambda e: ir_al_menu(page)),
         ft.Text("📂 Borradores", size=24, weight="bold", color=ft.Colors.BLUE_200),
         ft.Text("Inspecciones guardadas a medias. Elige una para retomarla donde la dejaste.", size=13, color=ft.Colors.GREY_400),
         cont,
-    )
+    ]
+    try:
+        page.views.append(ft.View(
+            route="/borradores",
+            controls=[ft.SafeArea(expand=True, content=ft.Column(contenido_b, scroll=ft.ScrollMode.AUTO, expand=True))],
+            padding=ft.Padding(left=12, top=12, right=12, bottom=12),
+            bgcolor=ft.Colors.with_opacity(1, "#0e1117"),
+        ))
+    except Exception:
+        page.controls.clear()
+        page.add(*contenido_b)
     refrescar()
 
 
@@ -3646,9 +3737,9 @@ def mostrar_selector(page: ft.Page):
     def etiqueta(tipo, modelo):
         return modelo if (tipo, modelo) in PERFILES else f"{modelo}  (próximamente)"
 
-    dd_tipo = ft.Dropdown(label="Tipo de equipo:", value="TOLVAS", dense=True,
+    dd_tipo = ft.Dropdown(label="Tipo de equipo:", value="CAMIONES", dense=True,
                           options=[ft.dropdown.Option(t) for t in CATALOGO_EQUIPOS])
-    dd_modelo = ft.Dropdown(label="Modelo:", dense=True, value="CAT")
+    dd_modelo = ft.Dropdown(label="Modelo:", dense=True, value="TOLVAS CAT")
     lbl = ft.Text("", size=13, color=ft.Colors.AMBER_400)
     btn = ft.Button("Continuar  →", bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, height=50, width=260)
 
@@ -3669,8 +3760,7 @@ def mostrar_selector(page: ft.Page):
         perfil = PERFILES.get((dd_tipo.value, dd_modelo.value))
         if perfil is None:
             return
-        page.controls.clear()
-        construir_formulario(page, perfil, volver=lambda: mostrar_selector(page))
+        construir_formulario(page, perfil, volver=lambda: ir_al_menu(page))
         page.update()
 
     dd_tipo.on_select = refrescar_modelos
@@ -3709,6 +3799,18 @@ def mostrar_selector(page: ft.Page):
 
 
 def main(page: ft.Page):
+    def al_cerrar_pantalla(e):
+        # gesto de atrás en pantallas simples (p. ej. Borradores): vuelve al menú
+        try:
+            if e.view is not None and e.view in page.views and len(page.views) > 1:
+                page.views.remove(e.view)
+        except Exception:
+            pass
+        if len(page.views) <= 1:
+            mostrar_selector(page)
+        page.update()
+
+    page.on_view_pop = al_cerrar_pantalla
     mostrar_selector(page)
 
 
