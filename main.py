@@ -471,6 +471,39 @@ def cargar_borrador(id_b):
 def eliminar_borrador(id_b):
     shutil.rmtree(os.path.join(_dir_borradores(), id_b), ignore_errors=True)
 
+# Accesorios / blindajes que normalmente se CAMBIAN (OT SOLD_CBO) y no se reparan (SOLD_REP)
+CAMBIO_PALABRAS = ("LINER", "CORTA FLUJO", "CORTAFLUJO", "CUBRE ESCAPE", "ROCK BOX", "ROCKBOX",
+                   "BLINDAJE DE PISO", "LETRERO")
+
+def texto_pide_cambio(texto):
+    """True si el texto contiene 'cambio' (cualquier mayúscula/minúscula, con tildes o con una letra mal escrita)."""
+    import difflib
+    import unicodedata
+    t = unicodedata.normalize("NFD", str(texto or ""))
+    t = "".join(ch for ch in t if unicodedata.category(ch) != "Mn").upper()
+    for palabra in re.findall(r"[A-Z]+", t):
+        if len(palabra) < 4 or len(palabra) > 9:
+            continue
+        if palabra.startswith("CAMBI"):
+            return True
+        if difflib.SequenceMatcher(None, palabra, "CAMBIO").ratio() >= 0.8:
+            return True
+    return False
+
+def tipo_ot_por_defecto(descripcion, defecto):
+    d = (descripcion or "").upper()
+    if defecto == "DE" or any(p_ in d for p_ in CAMBIO_PALABRAS):
+        return "SOLD_CBO"
+    return "SOLD_REP"
+
+def texto_ot(prefijo, descripcion, cod, extra, cant):
+    """SOLD_REP <punto> (cod) <extra>   |   SOLD_CBO DE <n> UNDS DE <punto> (cod) <extra>"""
+    cant = str(cant or "").strip()
+    base = f"DE {cant} UNDS DE {descripcion}" if (prefijo == "SOLD_CBO" and cant) else descripcion
+    cod_txt = f" ({cod})" if cod else ""
+    extra_txt = f" {extra.upper()}" if extra else ""
+    return f"{prefijo} {base}{cod_txt}{extra_txt}"
+
 def es_pm_espesores(pm_str):
     if not pm_str:
         return False
@@ -851,6 +884,11 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
     
     font_black = Font(color="000000")
     font_red = Font(color="FF0000", bold=True)
+    font_blue = Font(color="0000FF", bold=True)   # "ACEPTABLE" va en azul, como en la plantilla
+
+    def _texto_rojo(celda):
+        f_ = celda.font
+        celda.font = Font(name=f_.name, sz=f_.sz, b=f_.b, i=f_.i, color="FF0000")
 
     ws[cel["cliente"]] = cliente
     ws[cel["lugar"]] = lugar
@@ -1065,7 +1103,10 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
 
             for c_idx in [1, 2, 5, 7, 8, 9, 11, 12, 14]:
                 try:
-                    ws.cell(row=fila, column=c_idx).font = font_black if es_lf else font_red
+                    if es_lf:
+                        ws.cell(row=fila, column=c_idx).font = font_blue if c_idx == 12 else font_black
+                    else:
+                        ws.cell(row=fila, column=c_idx).font = font_red
                 except Exception:
                     pass
 
@@ -1125,6 +1166,7 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                 else:
                     texto_desc = f"ZONA {rechazo['zona']}\n{rechazo['descripcion'].upper()}\n\n{nombre_def_completo}"
                 ws.cell(row=fila_ini, column=1, value=texto_desc)
+                _texto_rojo(ws.cell(row=fila_ini, column=1))   # con defecto: toda la descripción en rojo
 
                 for prefijo_foto, col_0idx, col_span in (("pano", 4, 7), ("det", 11, 7)):
                     llave_base = f"img_{prefijo_foto}_{key_id}"
@@ -1150,7 +1192,16 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
                 siguiente_fila_libre = fila_fin + 1
                 fila_medida_hasta = fila_fin
 
-                ws.cell(row=fila_ini, column=1, value=oblig["descripcion"])
+                extra_l = (estado_app.get(f"desc_{oblig['llave']}") or "").strip().upper()
+                def_l = estado_app.get(f"def_{oblig['llave']}", "-")
+                texto_l = oblig["descripcion"]
+                if extra_l:
+                    texto_l += f"\n\n{extra_l}"
+                if def_l not in ("-", "", None):
+                    texto_l += f"\n\n{_NOMBRE_COMPLETO_DEFECTO.get(def_l, def_l)}"
+                ws.cell(row=fila_ini, column=1, value=texto_l)
+                if def_l not in ("-", "", None) or texto_pide_cambio(extra_l):
+                    _texto_rojo(ws.cell(row=fila_ini, column=1))
                 ws.cell(row=fila_ini, column=12, value="-")  # Detalle siempre "-"
 
                 llave_fija = oblig["llave"]
@@ -1194,13 +1245,14 @@ def generar_reporte_excel(ruta_plantilla, cliente, lugar, fecha_insp, cod_equipo
         if fila_ot > fila_ot_max:
             break
         defecto = rechazo["defecto"]
-        prefijo = "SOLD_CBO" if defecto == "DE" else "SOLD_REP"
+        prefijo = rechazo.get("tipo_ot") or tipo_ot_por_defecto(rechazo["descripcion"], defecto)
         codigo_sugerido = f"BK00{str(idx_ot + 1).zfill(5)}"
         codigo_backlog = estado_app.get(f"bk_{rechazo['key_id']}", codigo_sugerido)
         extra_ot = (rechazo.get("extra_desc") or "").strip().upper()
-        texto_ot = f"{prefijo} {rechazo['descripcion']} ({rechazo['zona']}){(' ' + extra_ot) if extra_ot else ''} - {codigo_backlog}"
+        texto_ot_txt = texto_ot(prefijo, rechazo['descripcion'], rechazo['zona'], extra_ot, rechazo.get("cant_ot"))
+        texto_ot_final = f"{texto_ot_txt} - {codigo_backlog}"
         try:
-            celda_ot = ws.cell(row=fila_ot, column=1, value=texto_ot)
+            celda_ot = ws.cell(row=fila_ot, column=1, value=texto_ot_final)
             celda_ot.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         except Exception:
             pass
@@ -2665,6 +2717,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
     # ==========================================================================
     contenedor_resumen_ots = ft.Column(spacing=8)
 
+    LETREROS_OT = []
     extras_por_punto = {}
     CONDICIONES = ["ACEPTABLE", "RECHAZADO", "MN", "NI"]
     COMENTARIOS = ["-", "CREAR OT", "OT CREADA", "PROG. REPARACIÓN", "SIN ACCESO"]
@@ -2689,7 +2742,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             info["cont"].controls.remove(card)
         if E in info["ids"]:
             info["ids"].remove(E)
-        for prefijo in ("def_", "opclong_", "longval_", "est_", "com_", "desc_", "img_pano_", "img_det_", "bk_"):
+        for prefijo in ("def_", "opclong_", "longval_", "est_", "com_", "desc_", "tipo_ot_", "cant_ot_", "img_pano_", "img_det_", "bk_"):
             controles.pop(prefijo + E, None)
         rutas_fotos.pop("img_pano_" + E, None)
         rutas_fotos.pop("img_det_" + E, None)
@@ -2707,9 +2760,15 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             E = f"{key_id}_x{info['n']}"
         defectos_x = [d for d in perfil["defectos"] if d != "LF"]
 
+        def al_cambiar_def_x(ev):
+            poner_tipo_por_defecto(E, desc_z, dd_def_x.value)
+            reconstruir_resumen_ots()
+            page.update()
+
         dd_def_x = ft.Dropdown(options=[ft.dropdown.Option(x) for x in defectos_x], value=defectos_x[0],
                                width=130, dense=True, text_size=13, label="Defecto",
-                               on_select=lambda ev: (reconstruir_resumen_ots(), page.update()))
+                               on_select=al_cambiar_def_x)
+        dd_tipo_x, txt_cant_x = crear_campos_ot(E, tipo_ot_por_defecto(desc_z, defectos_x[0]))
         dd_ol_x = ft.Dropdown(options=[ft.dropdown.Option("Manual"), ft.dropdown.Option("VARIOS")], value="Manual",
                               dense=True, text_size=13, width=150, label="Tipo de longitud")
         txt_l_x = ft.TextField(value="100", dense=True, text_size=13, width=150, label="Longitud (mm)")
@@ -2746,6 +2805,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 ft.Row([dd_def_x, ft.Column([dd_ol_x, txt_l_x], spacing=4, width=150), dd_est_x, dd_com_x],
                        wrap=True, spacing=8, run_spacing=8),
                 txt_desc_x,
+                ft.Row([dd_tipo_x, txt_cant_x], wrap=True, spacing=8),
                 ft.Row([
                     ft.Column([boton_foto("Foto Panorámica", f"img_pano_{E}"), lbl_p], spacing=4),
                     ft.Column([boton_foto("Foto de Detalle", f"img_det_{E}"), lbl_d], spacing=4),
@@ -2817,6 +2877,60 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
 
     resumenes_zona = {}
     zonas_plegables = []
+    descripcion_punto = {}
+
+    def campos_letrero(llave, nombre_letrero):
+        """Defecto del letrero (opcional), texto adicional y tipo de OT / cantidad."""
+        dd_dl = ft.Dropdown(
+            label="Defecto del letrero", value="-", width=200, dense=True, text_size=13,
+            options=[ft.dropdown.Option(key="-", text="Sin defecto"),
+                     ft.dropdown.Option(key="D", text="Desprendimiento"),
+                     ft.dropdown.Option(key="DE", text="Desgaste")],
+        )
+        txt_dl = ft.TextField(label="Descripción adicional (opcional)", dense=True, text_size=13, width=260,
+                              on_blur=lambda ev: (reconstruir_resumen_ots(), page.update()))
+        controles[f"def_{llave}"] = dd_dl
+        controles[f"desc_{llave}"] = txt_dl
+        dd_t, txt_c = crear_campos_ot(llave, "SOLD_CBO")
+        LETREROS_OT.append((llave, nombre_letrero))
+
+        def al_cambiar_def_l(ev=None):
+            visible = (dd_dl.value != "-") or texto_pide_cambio(txt_dl.value)
+            dd_t.visible = visible
+            txt_c.visible = visible and dd_t.value == "SOLD_CBO"
+            reconstruir_resumen_ots()
+            page.update()
+        dd_dl.on_select = al_cambiar_def_l
+        txt_dl.on_blur = al_cambiar_def_l
+        txt_dl.on_change = lambda ev: None
+        dd_t.visible = False
+        txt_c.visible = False
+        return ft.Column([dd_dl, txt_dl, ft.Row([dd_t, txt_c], wrap=True, spacing=8)], spacing=6)
+
+    def crear_campos_ot(E, tipo_inicial, cant_inicial="1"):
+        """Tipo de OT (reparar / cambiar) y, si es cambio, cantidad de unidades."""
+        dd_t = ft.Dropdown(options=[ft.dropdown.Option("SOLD_REP"), ft.dropdown.Option("SOLD_CBO")],
+                           value=tipo_inicial, width=170, dense=True, text_size=13, label="Tipo de OT")
+        txt_c = ft.TextField(label="Cantidad (UNDS)", value=cant_inicial, width=140, dense=True, text_size=13,
+                             visible=(tipo_inicial == "SOLD_CBO"))
+
+        def al_cambiar_tipo(ev=None):
+            txt_c.visible = (dd_t.value == "SOLD_CBO")
+            reconstruir_resumen_ots()
+            page.update()
+        dd_t.on_select = al_cambiar_tipo
+        txt_c.on_blur = lambda ev: (reconstruir_resumen_ots(), page.update())
+        controles[f"tipo_ot_{E}"] = dd_t
+        controles[f"cant_ot_{E}"] = txt_c
+        return dd_t, txt_c
+
+    def poner_tipo_por_defecto(E, descripcion, defecto):
+        t = controles.get(f"tipo_ot_{E}")
+        c = controles.get(f"cant_ot_{E}")
+        if t is not None:
+            t.value = tipo_ot_por_defecto(descripcion, defecto)
+            if c is not None:
+                c.visible = (t.value == "SOLD_CBO")
 
     def actualizar_resumenes_zona():
         for idx_zr, bz in enumerate(ESTRUCTURA_ZONAS):
@@ -2856,6 +2970,12 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                     rechazos_actuales.append((cod_z, desc_z, val_def, k_id, (controles[f"desc_{k_id}"].value or "").strip()))
                 for E in extras_por_punto.get(k_id, {}).get("ids", []):
                     rechazos_actuales.append((cod_z, desc_z, controles[f"def_{E}"].value, E, (controles[f"desc_{E}"].value or "").strip()))
+        for llave_l, nombre_l in LETREROS_OT:
+            if f"def_{llave_l}" in controles:
+                def_ll = controles[f"def_{llave_l}"].value
+                desc_ll = (controles[f"desc_{llave_l}"].value or "").strip()
+                if def_ll not in ("-", "", None) or texto_pide_cambio(desc_ll):
+                    rechazos_actuales.append(("", nombre_l, def_ll if def_ll not in ("-", "", None) else "CAMBIO", llave_l, desc_ll))
 
         if not rechazos_actuales:
             contenedor_resumen_ots.controls.append(
@@ -2869,18 +2989,21 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 ft.Text("Resumen sugerido de Órdenes de Trabajo según los defectos reportados:", size=12, color=ft.Colors.GREY_400)
             )
             for idx_ot, (cod_z, desc_z, val_def, k_id, extra_d) in enumerate(rechazos_actuales):
-                prefijo = "SOLD_CBO" if val_def == "DE" else "SOLD_REP"
+                t_ctl = controles.get(f"tipo_ot_{k_id}")
+                c_ctl = controles.get(f"cant_ot_{k_id}")
+                prefijo = (t_ctl.value if t_ctl is not None else None) or tipo_ot_por_defecto(desc_z, val_def)
+                cant_ot = c_ctl.value if c_ctl is not None else ""
                 sugerido = f"BK00{str(idx_ot + 1).zfill(5)}"
                 llave_bk = f"bk_{k_id}"
                 if llave_bk not in controles:
                     controles[llave_bk] = ft.TextField(
-                        label=f"Código Backlog SAP ({cod_z}{(' · ' + extra_d) if extra_d else ''}):",
+                        label=f"Código Backlog SAP ({cod_z or desc_z}{(' · ' + extra_d) if extra_d else ''}):",
                         value=sugerido, dense=True, width=220, text_size=13
                     )
                 contenedor_resumen_ots.controls.append(
                     ft.Column([
                         ft.Container(
-                            content=ft.Text(f"{prefijo} {desc_z} ({cod_z}){(' ' + extra_d.upper()) if extra_d else ''} - {val_def}", font_family="Consolas", size=13, color=ft.Colors.BLUE_200),
+                            content=ft.Text(f"{texto_ot(prefijo, desc_z, cod_z, extra_d, cant_ot)} - {val_def}", font_family="Consolas", size=13, color=ft.Colors.BLUE_200),
                             bgcolor=ft.Colors.BLUE_GREY_900, padding=10, border_radius=6
                         ),
                         controles[llave_bk]
@@ -2995,11 +3118,14 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 on_blur=lambda ev: (reconstruir_resumen_ots(), page.update()),
             )
             controles[f"desc_{key_id}"] = txt_desc_main
+            descripcion_punto[key_id] = desc_z
+            dd_tipo_ot, txt_cant_ot = crear_campos_ot(key_id, tipo_ot_por_defecto(desc_z, "LF"))
 
             contenedor_fotos_rechazo = ft.Container(
                 content=ft.Column([
                     ft.Text(f"📷 Fotos de Hallazgo: {desc_z} ({cod_z})", weight="bold", size=12, color=ft.Colors.AMBER_300),
                     txt_desc_main,
+                    ft.Row([dd_tipo_ot, txt_cant_ot], wrap=True, spacing=8),
                     ft.Row([
                         ft.Column([boton_foto("Foto Panorámica", f"img_pano_{key_id}"), lbl_pano], spacing=4),
                         ft.Column([boton_foto("Foto de Detalle", f"img_det_{key_id}"), lbl_det], spacing=4),
@@ -3025,6 +3151,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                         dd_cm.disabled = True
                         box_fotos.visible = False
                     else:
+                        poner_tipo_por_defecto(k_id, descripcion_punto.get(k_id, ""), e.control.value)
                         lbl_c.value = "RECHAZADO"
                         lbl_c.color = ft.Colors.RED_400
                         dd_ol.visible = True
@@ -3096,14 +3223,16 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             lbl_pano_lh = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
             controles["img_pano_esp_z2_rh"] = lbl_pano_rh
             controles["img_pano_esp_z2_lh"] = lbl_pano_lh
+            campos_rh = campos_letrero("esp_z2_rh", "LETRERO LATERAL RH")
+            campos_lh = campos_letrero("esp_z2_lh", "LETRERO LATERAL LH")
 
             agregar(
                 ft.Container(
                     content=ft.Column([
                         ft.Text("📷 Letreros Obligatorios Especiales: Laterales RH / LH", weight="bold", color=ft.Colors.YELLOW_600, size=14),
                         ft.Row([
-                            ft.Column([boton_foto("Letrero Lateral RH (Panorámico)", "img_pano_esp_z2_rh"), lbl_pano_rh], spacing=4),
-                            ft.Column([boton_foto("Letrero Lateral LH (Panorámico)", "img_pano_esp_z2_lh"), lbl_pano_lh], spacing=4),
+                            ft.Column([boton_foto("Letrero Lateral RH (Panorámico)", "img_pano_esp_z2_rh"), lbl_pano_rh, campos_rh], spacing=4),
+                            ft.Column([boton_foto("Letrero Lateral LH (Panorámico)", "img_pano_esp_z2_lh"), lbl_pano_lh, campos_lh], spacing=4),
                         ], wrap=True, spacing=20, run_spacing=10)
                     ], spacing=8),
                     padding=15, bgcolor=ft.Colors.BLUE_GREY_900, border_radius=8
@@ -3112,13 +3241,14 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
         elif idx_z == perfil["idx_letrero_posterior"]:
             lbl_pano_post = ft.Text("Sin foto", size=11, color=ft.Colors.RED_400)
             controles["img_pano_esp_z8_post"] = lbl_pano_post
+            campos_post = campos_letrero("esp_z8_post", "LETRERO POSTERIOR")
 
             agregar(
                 ft.Container(
                     content=ft.Column([
                         ft.Text("📷 Letrero Obligatorio Especial: Posterior", weight="bold", color=ft.Colors.YELLOW_600, size=14),
                         ft.Column([
-                            ft.Column([boton_foto("Letrero Posterior (Panorámico)", "img_pano_esp_z8_post"), lbl_pano_post], spacing=4),
+                            ft.Column([boton_foto("Letrero Posterior (Panorámico)", "img_pano_esp_z8_post"), lbl_pano_post, campos_post], spacing=4),
                             ft.Container(
                                 content=ft.Text("ℹ️ Requerido para la zona posterior (Z08). El campo 'Detalle' en el Excel se llenará automáticamente con '-'.", size=12, color=ft.Colors.BLUE_200),
                                 bgcolor=ft.Colors.BLUE_900, padding=10, border_radius=6
@@ -3317,6 +3447,10 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 return "VARIOS"
             return estado_app.get(f"longval_{clave}", "100")
 
+        def _tipo_cant(clave, desc_p, defecto_p):
+            return {"tipo_ot": estado_app.get(f"tipo_ot_{clave}") or tipo_ot_por_defecto(desc_p, defecto_p),
+                    "cant_ot": estado_app.get(f"cant_ot_{clave}") or ""}
+
         for idx_z, zona in enumerate(ESTRUCTURA_ZONAS):
             for idx_i, item in enumerate(zona["items"]):
                 cod_z, desc_z, tec_def = item
@@ -3332,6 +3466,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                         "comentario": estado_app.get(f"com_{key_id}", "CREAR OT"),
                         "key_id": key_id, "punto_id": key_id, "es_extra": False,
                         "extra_desc": (estado_app.get(f"desc_{key_id}") or "").strip(),
+                        **_tipo_cant(key_id, desc_z, def_val),
                     })
                 for E in extras_por_punto.get(key_id, {}).get("ids", []):
                     todos_los_rechazos.append({
@@ -3343,7 +3478,19 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                         "comentario": estado_app.get(f"com_{E}", "CREAR OT"),
                         "key_id": E, "punto_id": key_id, "es_extra": True,
                         "extra_desc": (estado_app.get(f"desc_{E}") or "").strip(),
+                        **_tipo_cant(E, desc_z, estado_app.get(f"def_{E}", "D")),
                     })
+        for llave_l, nombre_l in LETREROS_OT:
+            def_l = estado_app.get(f"def_{llave_l}", "-")
+            desc_l = (estado_app.get(f"desc_{llave_l}") or "").strip()
+            if def_l not in ("-", "", None) or texto_pide_cambio(desc_l):
+                todos_los_rechazos.append({
+                    "zona": "", "descripcion": nombre_l, "defecto": def_l if def_l not in ("-", "", None) else "-", "longitud": "-", "est_post": "-",
+                    "tecnica": "-", "comentario": "-", "key_id": llave_l, "punto_id": llave_l, "es_extra": False,
+                    "es_letrero": True, "extra_desc": (estado_app.get(f"desc_{llave_l}") or "").strip(),
+                    "tipo_ot": estado_app.get(f"tipo_ot_{llave_l}") or "SOLD_CBO",
+                    "cant_ot": estado_app.get(f"cant_ot_{llave_l}") or "1",
+                })
 
         try:
             cliente_final = txt_cliente_manual.value if dd_cliente.value == "[Entrada Manual]" else dd_cliente.value
@@ -3445,7 +3592,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
     for idx_z, bz in enumerate(ESTRUCTURA_ZONAS):
         for idx_i, it in enumerate(bz["items"]):
             puntos_info[f"z{idx_z}_{idx_i}"] = (it[0], it[1])
-    PREFIJOS_PUNTO = ("def_", "opclong_", "longval_", "est_", "tec_", "com_", "cond_", "desc_", "bk_")
+    PREFIJOS_PUNTO = ("def_", "opclong_", "longval_", "est_", "tec_", "com_", "cond_", "desc_", "tipo_ot_", "cant_ot_", "bk_")
     campos_gen = {
         "dd_cliente": dd_cliente, "txt_cliente_manual": txt_cliente_manual, "dd_lugar": dd_lugar,
         "txt_lugar_manual": txt_lugar_manual, "txt_fecha_insp": txt_fecha_insp, "dd_equipo": dd_equipo,
@@ -3546,7 +3693,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                 ctl_def.value = v
                 if getattr(ctl_def, "on_select", None):
                     ctl_def.on_select(SimpleNamespace(control=ctl_def))
-            for pref in ("tec_", "opclong_", "longval_", "est_", "com_", "cond_", "desc_"):
+            for pref in ("tec_", "opclong_", "longval_", "est_", "com_", "cond_", "desc_", "tipo_ot_", "cant_ot_"):
                 kk = pref + K
                 if kk in puntos and kk in controles:
                     controles[kk].value = puntos[kk]
@@ -3564,7 +3711,7 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
             cod_z, desc_z = puntos_info[K]
             for E in info.get("ids", []):
                 agregar_extra(K, cod_z, desc_z, E_forzado=E)
-                for pref in ("def_", "opclong_", "longval_", "est_", "com_", "desc_"):
+                for pref in ("def_", "opclong_", "longval_", "est_", "com_", "desc_", "tipo_ot_", "cant_ot_"):
                     kk = pref + E
                     if kk in puntos and kk in controles:
                         controles[kk].value = puntos[kk]
@@ -3573,6 +3720,22 @@ def construir_formulario(page: ft.Page, perfil, volver=None, borrador=None):
                     ol.on_select(SimpleNamespace(control=ol))
             extras_por_punto[K]["n"] = max(extras_por_punto[K]["n"], info.get("n", 0))
 
+        for llave_l, _n in LETREROS_OT:
+            for pref in ("def_", "desc_", "tipo_ot_", "cant_ot_"):
+                kk = pref + llave_l
+                if kk in puntos and kk in controles:
+                    controles[kk].value = puntos[kk]
+        # mostrar/ocultar la cantidad según el tipo de OT guardado
+        for kk, ctl in list(controles.items()):
+            if kk.startswith("tipo_ot_"):
+                base = kk[len("tipo_ot_"):]
+                c_ctl = controles.get("cant_ot_" + base)
+                if c_ctl is not None:
+                    es_letrero = base in dict(LETREROS_OT)
+                    hay_def = (not es_letrero) or controles.get("def_" + base).value not in ("-", "", None) \
+                        or texto_pide_cambio(controles.get("desc_" + base).value)
+                    ctl.visible = hay_def if es_letrero else ctl.visible
+                    c_ctl.visible = hay_def and ctl.value == "SOLD_CBO"
         reconstruir_resumen_ots()
         for kk, v in puntos.items():
             if kk.startswith("bk_") and kk in controles and v is not None:
